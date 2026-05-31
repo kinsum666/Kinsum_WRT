@@ -182,7 +182,7 @@ install_custom_feed() {
     custom_feed_sources=(
         "kenzok8/small-package|https://github.com/kenzok8/small-package.git||${base_custom_feed_packages[*]}"
         "sbwml/luci-app-mosdns|https://github.com/sbwml/luci-app-mosdns.git|v5|mosdns luci-app-mosdns"
-        "Openwrt-Passwall/openwrt-passwall|https://github.com/Openwrt-Passwall/openwrt-passwall.git|main|luci-app-passwall"
+        #"Openwrt-Passwall/openwrt-passwall|https://github.com/Openwrt-Passwall/openwrt-passwall.git|main|luci-app-passwall"
         "nikkinikki-org/OpenWrt-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki.git|main|nikki luci-app-nikki mihomo-meta"
     )
 
@@ -228,7 +228,7 @@ verify_custom_feed_installed_paths() {
     local custom_feed_package_dir
     local required_package_dirs=(
         luci-app-adguardhome luci-app-mosdns v2ray-geodata luci-app-easytier
-        luci-app-passwall nikki luci-app-nikki mihomo-meta
+        #luci-app-passwall nikki luci-app-nikki mihomo-meta
     )
     local missing_package_dirs=()
 
@@ -459,6 +459,62 @@ update_diskman() {
         sed -i '/ntfs-3g-utils /d' "$path/Makefile"
     fi
 }
+#------------------------------------
+
+add_compiler_info() {
+    local author="kinsum"
+    local contact="1269678689@email.com "
+    local build_date=$(date "+%Y-%m-%d %H:%M:%S")
+    local custom_name="Kwrt"          # 自定义发行版名称
+    local custom_version="v1.0"            # 自定义版本号
+
+    # 获取 default-settings 的 uci-defaults 目录
+    local settings_dir=$(find "$BUILD_DIR/package" -type d -name "default-settings" -print -quit 2>/dev/null)
+    if [ -z "$settings_dir" ]; then
+        echo "错误：未找到 default-settings 目录，无法添加编译者信息" >&2
+        return 1
+    fi
+
+    local uci_defaults_dir="$settings_dir/files/etc/uci-defaults"
+    mkdir -p "$uci_defaults_dir"
+
+    # 创建一个 uci-defaults 脚本（数字前缀确保执行顺序靠后）
+    cat > "$uci_defaults_dir/99-compiler-info" <<EOF
+#!/bin/sh
+
+# 写入 /etc/openwrt_release 中的自定义字段
+[ -f /etc/openwrt_release ] && {
+    sed -i "s/^DISTRIB_DESCRIPTION=.*/DISTRIB_DESCRIPTION='$custom_name $custom_version'/g" /etc/openwrt_release
+    echo "DISTRIB_CUSTOM='编译者：$author (联系: $contact)'" >> /etc/openwrt_release
+    echo "DISTRIB_BUILD_DATE='$build_date'" >> /etc/openwrt_release
+}
+
+# 修改登录欢迎信息 (/etc/banner)
+if [ -f /etc/banner ]; then
+    echo "" >> /etc/banner
+    echo "---------------------------------------------" >> /etc/banner
+    echo "  Firmware compiled by: $author" >> /etc/banner
+    echo "  Contact: $contact" >> /etc/banner
+    echo "  Build date: $build_date" >> /etc/banner
+    echo "---------------------------------------------" >> /etc/banner
+fi
+
+# 可选：在 LuCI 界面显示额外信息（修改 /usr/lib/lua/luci/version.lua）
+if [ -f /usr/lib/lua/luci/version.lua ]; then
+    sed -i "s/^lucidist=.*/lucidist='$custom_name'/g" /usr/lib/lua/luci/version.lua
+    sed -i "s/^luciversion=.*/luciversion='$custom_version ($build_date)'/g" /usr/lib/lua/luci/version.lua
+fi
+
+exit 0
+EOF
+
+    chmod +x "$uci_defaults_dir/99-compiler-info"
+    echo "编译者信息已添加到 default-settings 中"
+}
+
+
+#-----------------------
+
 
 _sync_luci_lib_docker() {
     local lib_path="$BUILD_DIR/feeds/luci/libs/luci-lib-docker"
