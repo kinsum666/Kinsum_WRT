@@ -1,4 +1,4 @@
-name: Build_JDC
+name: Build JDC
 run-name: Build - ${{ inputs.model }}
 
 on:
@@ -30,7 +30,9 @@ jobs:
         run: |
           sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
           sudo -E apt -yqq install dos2unix libfuse-dev
-          sudo -E apt -yqq autoremove --purge autoclean clean
+          sudo -E apt -yqq autoremove --purge
+          sudo -E apt -yqq autoclean
+          sudo -E apt -yqq clean
           sudo -E systemctl daemon-reload
 
       - name: Checkout
@@ -48,7 +50,6 @@ jobs:
         run: |
           echo "=== 自定义系统配置 ==="
           
-          # 1. 修改 LAN IP 为 192.168.188.1
           CONFIG_GEN=$(find ./action_build -name "config_generate" -path "*/base-files/files/bin/config_generate" | head -1)
           if [ -n "$CONFIG_GEN" ]; then
             sed -i 's/192.168.1.1/192.168.188.1/g' "$CONFIG_GEN"
@@ -57,7 +58,6 @@ jobs:
             echo "未找到 config_generate，跳过 IP 修改"
           fi
           
-          # 2. 设置 root 密码为 erlang
           PWD_HASH=$(openssl passwd -1 "erlang")
           SHADOW_FILE=$(find ./action_build -name "shadow" -path "*/base-files/files/etc/shadow" | head -1)
           if [ -n "$SHADOW_FILE" ]; then
@@ -67,7 +67,6 @@ jobs:
             echo "root:${PWD_HASH}:0:0:99999:7:::" > ./action_build/package/base-files/files/etc/shadow
           fi
           
-          # 3. 配置默认 WiFi SSID=Titok 密码=yunding888（避免使用 << heredoc）
           mkdir -p ./action_build/files/etc/config
           cat > ./action_build/files/etc/config/wireless << "WIRELESS_EOF"
           config wifi-device 'radio0'
