@@ -167,3 +167,18 @@ jobs:
         with:
           name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
           path: ./per_device_packages/*.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
+          name: Firmware ${{ env.BUILD_DATE }} (${{ inputs.model }})
+          body: |
+            ## 自动构建固件
+            - 设备：${{ inputs.model }}
+            - 构建时间：${{ env.BUILD_DATE }}
+            - LAN IP：192.168.188.1
+            - WiFi：Titok / Titok_5G (密码 yunding888)
+            - 登录密码：erlang
+          files: ./per_device_packages/*.zip
+          fail_on_unmatched_files: true
