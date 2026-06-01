@@ -169,16 +169,29 @@ jobs:
           path: ./per_device_packages/*.zip
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
-          name: Firmware ${{ env.BUILD_DATE }} (${{ inputs.model }})
-          body: |
-            ## 自动构建固件
-            - 设备：${{ inputs.model }}
-            - 构建时间：${{ env.BUILD_DATE }}
-            - LAN IP：192.168.188.1
-            - WiFi：Titok / Titok_5G (密码 yunding888)
-            - 登录密码：erlang
-          files: ./per_device_packages/*.zip
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ env.BUILD_DATE }}_${{ inputs.model }}"
+          RELEASE_NAME="Firmware ${{ env.BUILD_DATE }} (${{ inputs.model }})"
+          RELEASE_BODY=$(cat <<EOF
+          ### 固件信息
+          - 设备型号: ${{ inputs.model }}
+          - 构建时间: ${{ env.BUILD_DATE }}
+          - 默认 LAN IP: 192.168.188.1
+          - 默认 WiFi SSID: Titok / Titok_5G
+          - 默认 WiFi 密码: yunding888
+          - 默认登录密码: erlang
+          
+          > 请根据设备型号选择对应的 .zip 文件解压后刷写。
+          EOF
+          )
+          
+          # 创建 Release（如果 tag 已存在则更新）
+          gh release create "$TAG_NAME" \
+            --title "$RELEASE_NAME" \
+            --notes "$RELEASE_BODY" \
+            ./per_device_packages/*.zip \
+            --repo ${{ github.repository }} \
+            --target ${{ github.sha }} \
+            || gh release upload "$TAG_NAME" ./per_device_packages/*.zip --clobber --repo ${{ github.repository }}
