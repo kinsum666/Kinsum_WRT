@@ -261,6 +261,9 @@ src/gz openwrt_luci https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/pa
 src/gz openwrt_packages https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/packages/
 src/gz openwrt_routing https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/routing/
 src/gz openwrt_telephony https://downloads.immortalwrt.org/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/telephony/
+src/gz openwrt_kindd9 https://dl.openwrt.ai/packages-24.10/aarch64_cortex-a53/kiddin9/
+
+
 EOF
 
         sed -i "/define Package\/default-settings\/install/a\\
