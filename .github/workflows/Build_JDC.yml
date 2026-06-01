@@ -81,7 +81,7 @@ jobs:
                   option device 'radio0'
                   option network 'lan'
                   option mode 'ap'
-                  option ssid 'Titok'
+                  option ssid 'Titok_5G'
                   option encryption 'psk2'
                   option key 'yunding888'
 
