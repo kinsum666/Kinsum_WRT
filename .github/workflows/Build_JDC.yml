@@ -47,7 +47,8 @@ jobs:
       - name: Customize Default Settings
         run: |
           echo "=== 自定义系统配置 ==="
-          # 修改 LAN IP
+          
+          # 1. 修改 LAN IP 为 192.168.188.1
           CONFIG_GEN=$(find ./action_build -name "config_generate" -path "*/base-files/files/bin/config_generate" | head -1)
           if [ -n "$CONFIG_GEN" ]; then
             sed -i 's/192.168.1.1/192.168.188.1/g' "$CONFIG_GEN"
@@ -55,7 +56,8 @@ jobs:
           else
             echo "未找到 config_generate，跳过 IP 修改"
           fi
-          # 设置 root 密码 erlang
+          
+          # 2. 设置 root 密码为 erlang
           PWD_HASH=$(openssl passwd -1 "erlang")
           SHADOW_FILE=$(find ./action_build -name "shadow" -path "*/base-files/files/etc/shadow" | head -1)
           if [ -n "$SHADOW_FILE" ]; then
@@ -64,39 +66,40 @@ jobs:
             mkdir -p ./action_build/package/base-files/files/etc
             echo "root:${PWD_HASH}:0:0:99999:7:::" > ./action_build/package/base-files/files/etc/shadow
           fi
-          # 配置 WiFi SSID=Titok 密码=yunding888
+          
+          # 3. 配置默认 WiFi SSID=Titok 密码=yunding888（避免使用 << heredoc）
           mkdir -p ./action_build/files/etc/config
-          cat > ./action_build/files/etc/config/wireless << 'EOF'
-config wifi-device 'radio0'
-        option type 'mac80211'
-        option channel 'auto'
-        option hwmode '11g'
-        option htmode 'HT20'
-        option disabled '0'
+          cat > ./action_build/files/etc/config/wireless << "WIRELESS_EOF"
+          config wifi-device 'radio0'
+                  option type 'mac80211'
+                  option channel 'auto'
+                  option hwmode '11g'
+                  option htmode 'HT20'
+                  option disabled '0'
 
-config wifi-iface 'default_radio0'
-        option device 'radio0'
-        option network 'lan'
-        option mode 'ap'
-        option ssid 'Titok'
-        option encryption 'psk2'
-        option key 'yunding888'
+          config wifi-iface 'default_radio0'
+                  option device 'radio0'
+                  option network 'lan'
+                  option mode 'ap'
+                  option ssid 'Titok'
+                  option encryption 'psk2'
+                  option key 'yunding888'
 
-config wifi-device 'radio1'
-        option type 'mac80211'
-        option channel 'auto'
-        option hwmode '11a'
-        option htmode 'VHT80'
-        option disabled '0'
+          config wifi-device 'radio1'
+                  option type 'mac80211'
+                  option channel 'auto'
+                  option hwmode '11a'
+                  option htmode 'VHT80'
+                  option disabled '0'
 
-config wifi-iface 'default_radio1'
-        option device 'radio1'
-        option network 'lan'
-        option mode 'ap'
-        option ssid 'Titok'
-        option encryption 'psk2'
-        option key 'yunding888'
-EOF
+          config wifi-iface 'default_radio1'
+                  option device 'radio1'
+                  option network 'lan'
+                  option mode 'ap'
+                  option ssid 'Titok'
+                  option encryption 'psk2'
+                  option key 'yunding888'
+          WIRELESS_EOF
           echo "WiFi 配置已生成 (Titok / yunding888)"
           echo "=== 配置完成 ==="
 
