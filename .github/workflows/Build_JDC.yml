@@ -1,0 +1,167 @@
+name: Build_JDC
+run-name: Build - ${{ inputs.model }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        required: true
+        description: Device Model
+        type: choice
+        default: jdcloud_ipq60xx_immwrt
+        options:
+          - cmcc_rax3000m_immwrt
+          - jdcloud_ax6000_immwrt
+          - jdcloud_ipq60xx_immwrt
+          - jdcloud_ipq60xx_libwrt
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Build System Setup
+        run: |
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+          sudo -E apt -yqq install dos2unix libfuse-dev
+          sudo -E apt -yqq autoremove --purge autoclean clean
+          sudo -E systemctl daemon-reload
+
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Set Build Date and Timezone
+        run: |
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+          echo "BUILD_DATE=$(TZ=UTC-8 date +'%y.%m.%d_%H.%M.%S')" >> $GITHUB_ENV
+
+      - name: Pre Clone
+        run: ./wrt_core/pre_clone_action.sh ${{ inputs.model }}
+
+      - name: Customize Default Settings
+        run: |
+          echo "=== 自定义系统配置 ==="
+          # 修改 LAN IP
+          CONFIG_GEN=$(find ./action_build -name "config_generate" -path "*/base-files/files/bin/config_generate" | head -1)
+          if [ -n "$CONFIG_GEN" ]; then
+            sed -i 's/192.168.1.1/192.168.188.1/g' "$CONFIG_GEN"
+            echo "LAN IP 已改为 192.168.188.1"
+          else
+            echo "未找到 config_generate，跳过 IP 修改"
+          fi
+          # 设置 root 密码 erlang
+          PWD_HASH=$(openssl passwd -1 "erlang")
+          SHADOW_FILE=$(find ./action_build -name "shadow" -path "*/base-files/files/etc/shadow" | head -1)
+          if [ -n "$SHADOW_FILE" ]; then
+            sed -i "s|^root:[^:]*|root:${PWD_HASH}|" "$SHADOW_FILE"
+          else
+            mkdir -p ./action_build/package/base-files/files/etc
+            echo "root:${PWD_HASH}:0:0:99999:7:::" > ./action_build/package/base-files/files/etc/shadow
+          fi
+          # 配置 WiFi SSID=Titok 密码=yunding888
+          mkdir -p ./action_build/files/etc/config
+          cat > ./action_build/files/etc/config/wireless << 'EOF'
+config wifi-device 'radio0'
+        option type 'mac80211'
+        option channel 'auto'
+        option hwmode '11g'
+        option htmode 'HT20'
+        option disabled '0'
+
+config wifi-iface 'default_radio0'
+        option device 'radio0'
+        option network 'lan'
+        option mode 'ap'
+        option ssid 'Titok'
+        option encryption 'psk2'
+        option key 'yunding888'
+
+config wifi-device 'radio1'
+        option type 'mac80211'
+        option channel 'auto'
+        option hwmode '11a'
+        option htmode 'VHT80'
+        option disabled '0'
+
+config wifi-iface 'default_radio1'
+        option device 'radio1'
+        option network 'lan'
+        option mode 'ap'
+        option ssid 'Titok'
+        option encryption 'psk2'
+        option key 'yunding888'
+EOF
+          echo "WiFi 配置已生成 (Titok / yunding888)"
+          echo "=== 配置完成 ==="
+
+      - name: Cache Dependencies
+        uses: actions/cache@v5.0.2
+        with:
+          path: |
+            ./action_build/.ccache
+            ./action_build/staging_dir
+          key: ${{ matrix.os }}-${{ hashFiles('**/repo_flag') }}-${{ env.BUILD_DATE }}
+          restore-keys: ${{ matrix.os }}-${{ hashFiles('**/repo_flag') }}-
+
+      - name: Refresh the cache
+        run: |
+          if [ -d "./action_build/staging_dir" ]; then
+            find "./action_build/staging_dir" -type d -name "stamp" -not -path "*target*" | while read dir; do
+              find "$dir" -type f -exec touch {} +
+            done
+          fi
+
+      - name: Machine Information (Pre-build)
+        run: |
+          echo "=============== Pre-build ==============="
+          echo "Time: $(date)"
+          echo "Runner: ${RUNNER_NAME} (${RUNNER_OS}/${RUNNER_ARCH})"
+          df -hT
+          du -sh ./action_build/.ccache ./action_build/staging_dir ./firmware 2>/dev/null || true
+
+      - name: Build Firmware
+        run: ./build.sh ${{ inputs.model }}
+
+      - name: Package per device
+        run: |
+          mkdir -p ./per_device_packages
+          for file in ./firmware/*; do
+            if [ -f "$file" ]; then
+              device=$(basename "$file" | grep -oP '(?<=ipq60xx-generic-)[a-zA-Z0-9_]+(?=-squashfs)' || cut -d'-' -f3)
+              [ -n "$device" ] || device="unknown"
+              mkdir -p "./tmp_pkg/$device"
+              cp "$file" "./tmp_pkg/$device/"
+            fi
+          done
+          if [ -d "./tmp_pkg" ]; then
+            for dev_dir in ./tmp_pkg/*; do
+              dev_name=$(basename "$dev_dir")
+              zip -r "./per_device_packages/${dev_name}.zip" "$dev_dir"
+            done
+            rm -rf ./tmp_pkg
+          else
+            zip -r "./per_device_packages/firmware.zip" ./firmware
+          fi
+
+      - name: Delete Old Cache
+        run: |
+          gh cache list --key ${{ matrix.os }}-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[].key' | while read key; do
+            gh cache delete "$key" || true
+          done
+
+      - name: Machine Information (Post-build)
+        run: |
+          echo "=============== Post-build ==============="
+          du -sh ./action_build/.ccache ./action_build/staging_dir ./firmware ./per_device_packages 2>/dev/null || true
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
+          path: ./per_device_packages/*.zip
