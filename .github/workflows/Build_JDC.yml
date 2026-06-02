@@ -18,13 +18,16 @@ on:
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+#CI权限
+permissions: write-all
+
+#CI任务
 jobs:
   build:
     strategy:
       matrix:
         os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-
     steps:
       - name: Build System Setup
         run: |
@@ -179,7 +182,29 @@ jobs:
           gh release create "$TAG_NAME" \
             --title "$RELEASE_NAME" \
             --notes "$RELEASE_BODY" \
-            ./per_device_packages/*.zip \
+            ./per_device_packages/*.* \
             --repo ${{ github.repository }} \
             --target ${{ github.sha }} \
-            || gh release upload "$TAG_NAME" ./per_device_packages/*.zip --clobber --repo ${{ github.repository }}
+            || gh release upload "$TAG_NAME" ./per_device_packages/*.* --clobber --repo ${{ github.repository }}
+
+   
+      - name: Release Firmware
+        uses: softprops/action-gh-release@v3   # 或 @master
+        with:
+          tag_name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
+          name: Firmware ${{ env.BUILD_DATE }} (${{ inputs.model }})
+          body: |
+            ### 固件信息
+            - 设备型号: ${{ inputs.model }}
+            - 构建时间: ${{ env.BUILD_DATE }}
+            - 默认 LAN IP: 192.168.188.1
+            - 默认 WiFi SSID: Titok / Titok_5G
+            - 默认 WiFi 密码: yunding888
+            - 默认登录密码: erlang
+          files: ./per_device_packages/*.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+
+
