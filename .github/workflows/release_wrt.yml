@@ -29,8 +29,8 @@ on:
           - zn_m2_libwrt
           - x64_immwrt
 
-env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#env:
+  #GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 permissions:
   actions: write
@@ -213,7 +213,7 @@ jobs:
           name: "Firmware ${{ inputs.model }} - ${{ env.BUILD_DATE }}"
           files: ./upload/*.*
           body_path: ./release_body.txt
-      
+          allowUpdates: true
       #- name: Release Firmware
        # uses: softprops/action-gh-release@v2.5.0
         # with:
