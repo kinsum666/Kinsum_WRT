@@ -161,7 +161,7 @@ jobs:
           OPENWRT_ARMVIRT: firmware/*.tar.gz
           PACKAGE_SOC: s905d
           KERNEL_VERSION_NAME: 6.6.y
-          WHOAMI: ZqinKing
+          WHOAMI: Kinsum
 
       - name: Prepare Release Body
         run: |
@@ -169,13 +169,48 @@ jobs:
           echo "源码：${{ env.BUILD_SRC }}" >> release_body.txt
           echo "Kernel: ${{ env.KVER }}" >> release_body.txt
           echo "WIFI密码: 12345678" >> release_body.txt
-          echo "LAN地址: 192.168.1.1" >> release_body.txt
+          echo "LAN地址: 192.168.188.1" >> release_body.txt
           echo "插件：" >> release_body.txt
           echo "$(grep -oP "luci-app(-[a-zA-Z0-9]{1,}){1,}" ./firmware/*.manifest | awk -F":" '{print $NF}')"  >> release_body.txt
+      # rename
+      - name: Rename Firmware Files
+        run: |
+          # 创建 upload 目录用于存放重命名后的文件
+          mkdir -p ./upload
+
+          # 对于 n1_immwrt，openwrt_packit 可能将输出放在其他目录（如 ./openwrt_packit_output）
+          # 这里统一复制到 ./firmware 目录，便于后续处理
+          if [ "${{ inputs.model }}" == "n1_immwrt" ] && [ -d "./openwrt_packit_output" ]; then
+            cp -r ./openwrt_packit_output/* ./firmware/
+          fi
+
+          # 复制所有固件文件到 upload 目录（包括 .manifest 等）
+          cp -r ./firmware/* ./upload/ 2>/dev/null || true
+
+          # 进入 upload 目录，对每个文件重命名（添加型号和日期）
+          cd ./upload
+          for FILE in *.*; do
+            if [ -f "$FILE" ]; then
+              BASENAME="${FILE%.*}"
+              EXT="${FILE##*.}"
+              # 新文件名：原文件名_型号_日期.扩展名
+              NEWNAME="${BASENAME}_${{ inputs.model }}_${{ env.BUILD_DATE }}.${EXT}"
+              mv "$FILE" "$NEWNAME"
+            fi
+          done
+
 
       - name: Release Firmware
         uses: softprops/action-gh-release@v2.5.0
         with:
           tag_name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
-          files: ${{ inputs.model == 'n1_immwrt' && env.PACKAGED_OUTPUTPATH || './firmware' }}/*.*
+          name: "Firmware ${{ inputs.model }} - ${{ env.BUILD_DATE }}"
+          files: ./upload/*.*
           body_path: ./release_body.txt
+      
+      #- name: Release Firmware
+       # uses: softprops/action-gh-release@v2.5.0
+        # with:
+       #    tag_name: ${{ env.BUILD_DATE }}_${{ inputs.model }}
+       #    files: ${{ inputs.model == 'n1_immwrt' && env.PACKAGED_OUTPUTPATH || './firmware' }}/*.*
+       #    body_path: ./release_body.txt
