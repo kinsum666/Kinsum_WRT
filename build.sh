@@ -185,7 +185,7 @@ apply_config() {
     fi
     # 3. 追加公共编译基础配置
     cat "$BASE_PATH/deconfig/compile_base.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-    # 4. 追加 Docker 依赖（包含 luci-app-dockerman 等）
+    # 4. 追加 Docker 依赖
     cat "$BASE_PATH/deconfig/docker_deps.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
     # 5. 追加代理配置（如有）
     cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
@@ -194,9 +194,6 @@ apply_config() {
     local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
     mkdir -p "$UCI_DEFAULTS_DIR"
     cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
-
-
-
 #!/bin/sh
 # 设置主机名
 uci set system.@system[0].hostname='Kinsum'
@@ -243,21 +240,22 @@ EOF
     chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
 
     # ========== 修改 default-settings 中的构建者信息 ==========
-    # 获取版本号（优先使用 BUILD_DATE）
     if [ -n "$BUILD_DATE" ]; then
         VERSION_SUFFIX="$BUILD_DATE"
     else
         VERSION_SUFFIX="$(date +%y.%m.%d)"
     fi
 
-    DEFAULT_SETTINGS_MAKEFILE="$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/Makefile"
-    if [ -f "$DEFAULT_SETTINGS_MAKEFILE" ]; then
-        # 替换 ZqinKing 为 Kinsum@<日期>
-        sed -i "s/ZqinKing/Kinsum@$VERSION_SUFFIX/g" "$DEFAULT_SETTINGS_MAKEFILE"
-        echo "✅ default-settings Makefile 已修改为 Kinsum@$VERSION_SUFFIX"
-    else
-        echo "⚠️ 未找到 default-settings Makefile，路径: $DEFAULT_SETTINGS_MAKEFILE"
-    fi
+    # 查找并替换所有包含 ZqinKing 的 Makefile（多个可能路径）
+    for mk in "$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/Makefile" \
+              "$BASE_PATH/../$BUILD_DIR/package/immortalwrt/default-settings/Makefile" \
+              "$BASE_PATH/../$BUILD_DIR/feeds/emortal/default-settings/Makefile" \
+              "$BASE_PATH/../$BUILD_DIR/feeds/immortalwrt/default-settings/Makefile"; do
+        if [ -f "$mk" ]; then
+            sed -i "s/ZqinKing/Kinsum@$VERSION_SUFFIX/g" "$mk"
+            echo "✅ 已修改 $mk"
+        fi
+    done
 
     # ========== 修改 athena_led 默认配置 ==========
     ATHENA_CFG="$BASE_PATH/../$BUILD_DIR/files/etc/config/athena_led"
@@ -298,7 +296,7 @@ EOF
 EOF
     echo "✅ 定时开关灯 crontab 已配置"
 
-    # ======================== LED 按键控制 ========================
+    # ======================== LED 按键控制（增强版，带日志） ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh" << "EOF"
 #!/bin/sh
@@ -309,12 +307,14 @@ led_off() {
         [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
         [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
     done
+    logger -t "led_toggle" "LEDs turned OFF"
 }
 
 led_on() {
     for led in /sys/class/leds/*; do
         [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
     done
+    logger -t "led_toggle" "LEDs turned ON"
 }
 
 if [ -f "$LED_STATE_FILE" ]; then
@@ -336,7 +336,8 @@ EOF
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led" << "EOF"
 #!/bin/sh
-# 按键 LED 开关（防抖，适配所有常见键值）
+# 按键 LED 开关（带防抖和日志）
+logger -t "led_button" "Hotplug triggered: ACTION=$ACTION, BUTTON=$BUTTON"
 
 case "$ACTION" in
     pressed)
@@ -346,9 +347,10 @@ case "$ACTION" in
             exit 0
         fi
         echo "$NOW" > /tmp/button_last_time
+        logger -t "led_button" "Button $BUTTON pressed, toggling LED"
 
         case "$BUTTON" in
-            BTN_*|mesh|wps|reset)
+            BTN_*|mesh|wps|reset|rfkill)
                 /etc/led_toggle.sh &
                 ;;
         esac
@@ -356,14 +358,11 @@ case "$ACTION" in
 esac
 EOF
     chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led"
-    echo "✅ LED 按键控制脚本已配置"
+    echo "✅ LED 按键控制脚本已配置（带日志）"
 
-
- 
- # ========== 京东云 eMMC p27 首次格式化 + 自动挂载 ==========
-# ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
-mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
-cat > "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data" << 'EOF'
+    # ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data" << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
 STOP=10
@@ -372,12 +371,10 @@ MOUNT_POINT="/opt"
 FS_TYPE="ext4"
 STAMP="/etc/.data_formatted"
 
-# 尝试查找数据分区（优先 mmcblk0p27，然后 mmcblk0p28，最后自动检测）
 find_partition() {
     for p in /dev/mmcblk0p27 /dev/mmcblk0p28 /dev/mmcblk1p1; do
         [ -b "$p" ] && echo "$p" && return 0
     done
-    # 若都不存在，自动选择 mmcblk0 上编号最大的分区
     local last=$(ls /dev/mmcblk0p* 2>/dev/null | sort -V | tail -1)
     [ -n "$last" ] && echo "$last" && return 0
     return 1
@@ -390,13 +387,11 @@ start() {
         return 1
     fi
 
-    # 检查是否已挂载
     if mount | grep -q "$PARTITION"; then
         logger -t "format_data" "$PARTITION already mounted."
         return 0
     fi
 
-    # 检测文件系统类型（如果有）
     FSTYPE=$(blkid -s TYPE -o value "$PARTITION" 2>/dev/null)
     if [ "$FSTYPE" != "$FS_TYPE" ] && [ ! -f "$STAMP" ]; then
         logger -t "format_data" "Formatting $PARTITION as $FS_TYPE..."
@@ -412,7 +407,6 @@ start() {
 
     mkdir -p "$MOUNT_POINT"
     mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
-        # 尝试重新挂载一次（可能设备未完全就绪）
         sleep 2
         mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
             logger -t "format_data" "Mount failed!"
@@ -421,17 +415,15 @@ start() {
     }
     logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
 
-    # 加入 fstab 以持久化
     if ! grep -q "$PARTITION" /etc/fstab; then
         echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
     fi
 }
 EOF
-chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
-mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
-ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
+    ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
 
-    # 输出完成信息
     echo "✅ apply_config: 所有自定义配置已完成"
 }
 
@@ -454,12 +446,11 @@ remove_uhttpd_dependency
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
 
-# 追加 e2fsprogs 和 blkid（用于分区格式化）
+# 追加必要的包（用于分区格式化）
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
 
 # ========== 在 make defconfig 之后强制写入版本信息 ==========
-# 确保版本配置不被 defconfig 覆盖
 if [ -n "$BUILD_DATE" ]; then
     VERSION_NUMBER="$BUILD_DATE"
 else
@@ -470,7 +461,6 @@ echo "CONFIG_VERSION_DIST=\"MyWRT\"" >> .config
 echo "CONFIG_VERSION_MANUFACTURER=\"Kinsum@$VERSION_NUMBER\"" >> .config
 echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> .config
 echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> .config
-# 重新合并配置
 make oldconfig
 
 # 如果目标是 x86_64，修改 distfeeds
@@ -492,6 +482,16 @@ fi
 
 make download -j$(($(nproc) * 2))
 make -j$(($(nproc) + 1)) || make -j1 V=s
+
+# ========== 在打包前修正 openwrt_release ==========
+# 查找并修改生成的 openwrt_release 文件，确保 build by 正确
+RELEASE_FILE=$(find "$TARGET_DIR" -path "*/root-*/etc/openwrt_release" 2>/dev/null | head -1)
+if [ -f "$RELEASE_FILE" ]; then
+    sed -i "s/ZqinKing/Kinsum@$VERSION_NUMBER/g" "$RELEASE_FILE"
+    echo "✅ 已修正 openwrt_release ($RELEASE_FILE)"
+else
+    echo "⚠️ 未找到 openwrt_release 文件，跳过"
+fi
 
 FIRMWARE_DIR="$BASE_PATH/../firmware"
 \rm -rf "$FIRMWARE_DIR"
