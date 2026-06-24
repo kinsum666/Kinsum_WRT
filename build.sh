@@ -183,36 +183,27 @@ apply_config() {
         ! grep -q "CONFIG_GIT_MIRROR" "$BASE_PATH/../$BUILD_DIR/.config"; then
         cat "$BASE_PATH/deconfig/nss.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
     fi
-   # 3. 追加公共编译基础配置
+    # 3. 追加公共编译基础配置
     cat "$BASE_PATH/deconfig/compile_base.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
     # 4. 追加 Docker 依赖
     cat "$BASE_PATH/deconfig/docker_deps.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-  # 5. 追加代理配置（如有）
+    # 5. 追加代理配置（如有）
     cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-   
-    # ========== 6. 自定义构建者信息（放在最后确保覆盖） ==========
-    # 优先使用 GitHub Actions 传入的 BUILD_DATE，否则使用当前日期
-    if [ -n "$BUILD_DATE" ]; then
-        VERSION_NUMBER="$BUILD_DATE"
-    else
-        VERSION_NUMBER="$(date +%y.%m.%d)"
-    fi
 
-    echo 'CONFIG_VERSION_DIST="MyWRT"' >> "$BASE_PATH/../$BUILD_DIR/.config"
-    echo 'CONFIG_VERSION_MANUFACTURER="Kinsum"' >> "$BASE_PATH/../$BUILD_DIR/.config"
-    echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> "$BASE_PATH/../$BUILD_DIR/.config"
-    echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> "$BASE_PATH/../$BUILD_DIR/.config"
-   # echo 'CONFIG_VERSION_BUG_URL="https://github.com/kinsum666/wrt_release/issues"' >> "$BASE_PATH/../$BUILD_DIR/.config"
-
-    # ========== 创建自定义默认配置（IP、密码、WiFi、DHCP、Netmask） ==========
+    # ========== 创建自定义默认配置（IP、Netmask、DHCP、WiFi、主机名、密码） ==========
     local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
     mkdir -p "$UCI_DEFAULTS_DIR"
     cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
 #!/bin/sh
+# 设置主机名
+uci set system.@system[0].hostname='Kinsum'
+uci commit system
+/etc/init.d/system restart
+
 # 设置 LAN IP 和子网掩码
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.188.1'
-uci set network.lan.netmask='255.255.255.0'    # 显式设置掩码
+uci set network.lan.netmask='255.255.255.0'
 uci commit network
 /etc/init.d/network restart
 
@@ -240,8 +231,8 @@ fi
 uci commit wireless
 wifi
 
-# 设置 root 密码为 erlang
-(echo "erlang"; echo "erlang") | passwd root
+# 设置 root 密码为 erlang（使用 chpasswd 更可靠）
+echo "root:erlang" | chpasswd
 
 # 删除自身（首次启动后生效）
 rm -f /etc/uci-defaults/99-custom-settings
@@ -268,6 +259,25 @@ remove_uhttpd_dependency
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
 
+# ========== 在 make defconfig 之后强制写入版本信息 ==========
+# 优先使用 GitHub Actions 传入的 BUILD_DATE，否则使用当前日期
+if [ -n "$BUILD_DATE" ]; then
+    VERSION_NUMBER="$BUILD_DATE"
+else
+    VERSION_NUMBER="$(date +%y.%m.%d)"
+fi
+
+# 追加版本配置，覆盖任何之前的设置
+# 如果您想保留 "ImmortalWRT" 发行版名称，请注释掉下一行
+echo "CONFIG_VERSION_DIST=\"MyWRT\"" >> .config
+echo "CONFIG_VERSION_MANUFACTURER=\"Kinsum@$VERSION_NUMBER\"" >> .config
+echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> .config
+echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> .config
+
+# 重新合并配置（使新追加的配置生效）
+make oldconfig
+
+# 如果目标是 x86_64，修改 distfeeds
 if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
     DISTFEEDS_PATH="$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/files/99-distfeeds.conf"
     if [ -d "${DISTFEEDS_PATH%/*}" ] && [ -f "$DISTFEEDS_PATH" ]; then
