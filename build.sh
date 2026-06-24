@@ -204,13 +204,15 @@ apply_config() {
     echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> "$BASE_PATH/../$BUILD_DIR/.config"
    # echo 'CONFIG_VERSION_BUG_URL="https://github.com/kinsum666/wrt_release/issues"' >> "$BASE_PATH/../$BUILD_DIR/.config"
 
-      # ========== 创建自定义默认配置（IP、密码、WiFi、DHCP） ==========
+    # ========== 创建自定义默认配置（IP、密码、WiFi、DHCP、Netmask） ==========
     local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
     mkdir -p "$UCI_DEFAULTS_DIR"
     cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
 #!/bin/sh
-# 设置 LAN IP
+# 设置 LAN IP 和子网掩码
+uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.188.1'
+uci set network.lan.netmask='255.255.255.0'    # 显式设置掩码
 uci commit network
 /etc/init.d/network restart
 
