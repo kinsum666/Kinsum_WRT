@@ -34,7 +34,7 @@ env:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 jobs:
   build:
