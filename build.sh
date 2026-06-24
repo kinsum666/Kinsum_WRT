@@ -204,7 +204,7 @@ apply_config() {
     echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> "$BASE_PATH/../$BUILD_DIR/.config"
    # echo 'CONFIG_VERSION_BUG_URL="https://github.com/kinsum666/wrt_release/issues"' >> "$BASE_PATH/../$BUILD_DIR/.config"
 
-      # ========== 创建自定义默认配置（IP、密码、WiFi） ==========
+      # ========== 创建自定义默认配置（IP、密码、WiFi、DHCP） ==========
     local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
     mkdir -p "$UCI_DEFAULTS_DIR"
     cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
@@ -213,6 +213,14 @@ apply_config() {
 uci set network.lan.ipaddr='192.168.188.1'
 uci commit network
 /etc/init.d/network restart
+
+# 配置 DHCP（dnsmasq）为 LAN 接口分配地址
+uci set dhcp.lan.start='100'
+uci set dhcp.lan.limit='150'
+uci set dhcp.lan.leasetime='12h'
+uci set dhcp.lan.ignore='0'
+uci commit dhcp
+/etc/init.d/dnsmasq restart
 
 # 设置 2.4G WiFi
 uci set wireless.radio0.disabled='0'
@@ -237,9 +245,6 @@ wifi
 rm -f /etc/uci-defaults/99-custom-settings
 EOF
     chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
-
-
-    
 }
 
 REPO_URL=$(read_ini_by_key "REPO_URL")
