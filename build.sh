@@ -185,7 +185,7 @@ apply_config() {
     fi
     # 3. 追加公共编译基础配置
     cat "$BASE_PATH/deconfig/compile_base.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-    # 4. 追加 Docker 依赖
+    # 4. 追加 Docker 依赖（包含 luci-app-dockerman 等）
     cat "$BASE_PATH/deconfig/docker_deps.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
     # 5. 追加代理配置（如有）
     cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
@@ -194,6 +194,9 @@ apply_config() {
     local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
     mkdir -p "$UCI_DEFAULTS_DIR"
     cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
+
+
+
 #!/bin/sh
 # 设置主机名
 uci set system.@system[0].hostname='Kinsum'
@@ -231,13 +234,205 @@ fi
 uci commit wireless
 wifi
 
-# 设置 root 密码为 erlang（使用 chpasswd 更可靠）
+# 设置 root 密码为 erlang
 echo "root:erlang" | chpasswd
 
 # 删除自身（首次启动后生效）
 rm -f /etc/uci-defaults/99-custom-settings
 EOF
     chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
+
+    # ========== 修改 default-settings 中的构建者信息 ==========
+    # 获取版本号（优先使用 BUILD_DATE）
+    if [ -n "$BUILD_DATE" ]; then
+        VERSION_SUFFIX="$BUILD_DATE"
+    else
+        VERSION_SUFFIX="$(date +%y.%m.%d)"
+    fi
+
+    DEFAULT_SETTINGS_MAKEFILE="$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/Makefile"
+    if [ -f "$DEFAULT_SETTINGS_MAKEFILE" ]; then
+        # 替换 ZqinKing 为 Kinsum@<日期>
+        sed -i "s/ZqinKing/Kinsum@$VERSION_SUFFIX/g" "$DEFAULT_SETTINGS_MAKEFILE"
+        echo "✅ default-settings Makefile 已修改为 Kinsum@$VERSION_SUFFIX"
+    else
+        echo "⚠️ 未找到 default-settings Makefile，路径: $DEFAULT_SETTINGS_MAKEFILE"
+    fi
+
+    # ========== 修改 athena_led 默认配置 ==========
+    ATHENA_CFG="$BASE_PATH/../$BUILD_DIR/files/etc/config/athena_led"
+    mkdir -p "$(dirname "$ATHENA_CFG")"
+    cat > "$ATHENA_CFG" << 'EOF'
+config athena_led 'config'
+    option enable '1'
+    option value 'Kinsum love you.'
+    option lightLevel '3'
+EOF
+    echo "✅ athena_led 配置已创建"
+
+    # ========== 修改 banner 登录欢迎信息 ==========
+    BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
+    if [ -f "$BANNER_FILE" ]; then
+        if ! grep -q "Compiled by Kinsum" "$BANNER_FILE"; then
+            cat >> "$BANNER_FILE" << "EOF"
+-----------------------------------------------
+  Firmware: JDC
+  Compiled by Kinsum @ $(TZ=UTC-8 date '+%Y-%m-%d %H:%M:%S')
+-----------------------------------------------
+EOF
+            echo "✅ banner 已追加"
+        else
+            echo "ℹ️ banner 已包含 Kinsum 信息，跳过"
+        fi
+    else
+        echo "⚠️  $BANNER_FILE not found, skip banner modification"
+    fi
+
+    # ======================== 定时开关灯 ========================
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs/root" << "EOF"
+# 每天 23:00 关闭 LED
+0 23 * * * uci set athena_led.config.enable='0' && uci commit athena_led && /etc/init.d/athena_led reload
+# 每天 07:00 开启 LED
+0 7 * * * uci set athena_led.config.enable='1' && uci commit athena_led && /etc/init.d/athena_led reload
+EOF
+    echo "✅ 定时开关灯 crontab 已配置"
+
+    # ======================== LED 按键控制 ========================
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh" << "EOF"
+#!/bin/sh
+LED_STATE_FILE="/tmp/led_state"
+
+led_off() {
+    for led in /sys/class/leds/*; do
+        [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
+        [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
+    done
+}
+
+led_on() {
+    for led in /sys/class/leds/*; do
+        [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
+    done
+}
+
+if [ -f "$LED_STATE_FILE" ]; then
+    STATE=$(cat "$LED_STATE_FILE")
+else
+    STATE="1"
+fi
+
+if [ "$STATE" = "1" ]; then
+    led_off
+    echo "0" > "$LED_STATE_FILE"
+else
+    led_on
+    echo "1" > "$LED_STATE_FILE"
+fi
+EOF
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh"
+
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led" << "EOF"
+#!/bin/sh
+# 按键 LED 开关（防抖，适配所有常见键值）
+
+case "$ACTION" in
+    pressed)
+        LAST=$(cat /tmp/button_last_time 2>/dev/null)
+        NOW=$(cut -d '.' -f 1 /proc/uptime)
+        if [ -n "$LAST" ] && [ $((NOW - LAST)) -lt 1 ]; then
+            exit 0
+        fi
+        echo "$NOW" > /tmp/button_last_time
+
+        case "$BUTTON" in
+            BTN_*|mesh|wps|reset)
+                /etc/led_toggle.sh &
+                ;;
+        esac
+        ;;
+esac
+EOF
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led"
+    echo "✅ LED 按键控制脚本已配置"
+
+
+ 
+ # ========== 京东云 eMMC p27 首次格式化 + 自动挂载 ==========
+# ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
+mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
+cat > "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data" << 'EOF'
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+
+MOUNT_POINT="/opt"
+FS_TYPE="ext4"
+STAMP="/etc/.data_formatted"
+
+# 尝试查找数据分区（优先 mmcblk0p27，然后 mmcblk0p28，最后自动检测）
+find_partition() {
+    for p in /dev/mmcblk0p27 /dev/mmcblk0p28 /dev/mmcblk1p1; do
+        [ -b "$p" ] && echo "$p" && return 0
+    done
+    # 若都不存在，自动选择 mmcblk0 上编号最大的分区
+    local last=$(ls /dev/mmcblk0p* 2>/dev/null | sort -V | tail -1)
+    [ -n "$last" ] && echo "$last" && return 0
+    return 1
+}
+
+start() {
+    PARTITION=$(find_partition)
+    if [ -z "$PARTITION" ]; then
+        logger -t "format_data" "No suitable partition found. Skip."
+        return 1
+    fi
+
+    # 检查是否已挂载
+    if mount | grep -q "$PARTITION"; then
+        logger -t "format_data" "$PARTITION already mounted."
+        return 0
+    fi
+
+    # 检测文件系统类型（如果有）
+    FSTYPE=$(blkid -s TYPE -o value "$PARTITION" 2>/dev/null)
+    if [ "$FSTYPE" != "$FS_TYPE" ] && [ ! -f "$STAMP" ]; then
+        logger -t "format_data" "Formatting $PARTITION as $FS_TYPE..."
+        mkfs.ext4 -F "$PARTITION" || {
+            logger -t "format_data" "Format failed!"
+            return 1
+        }
+        touch "$STAMP"
+        logger -t "format_data" "Format completed."
+    else
+        logger -t "format_data" "Partition already has $FSTYPE or stamp exists, skipping format."
+    fi
+
+    mkdir -p "$MOUNT_POINT"
+    mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+        # 尝试重新挂载一次（可能设备未完全就绪）
+        sleep 2
+        mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+            logger -t "format_data" "Mount failed!"
+            return 1
+        }
+    }
+    logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
+
+    # 加入 fstab 以持久化
+    if ! grep -q "$PARTITION" /etc/fstab; then
+        echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
+    fi
+}
+EOF
+chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
+mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
+ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
+
+    # 输出完成信息
+    echo "✅ apply_config: 所有自定义配置已完成"
 }
 
 REPO_URL=$(read_ini_by_key "REPO_URL")
@@ -259,22 +454,23 @@ remove_uhttpd_dependency
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
 
+# 追加 e2fsprogs 和 blkid（用于分区格式化）
+echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
+echo "CONFIG_PACKAGE_blkid=y" >> .config
+
 # ========== 在 make defconfig 之后强制写入版本信息 ==========
-# 优先使用 GitHub Actions 传入的 BUILD_DATE，否则使用当前日期
+# 确保版本配置不被 defconfig 覆盖
 if [ -n "$BUILD_DATE" ]; then
     VERSION_NUMBER="$BUILD_DATE"
 else
     VERSION_NUMBER="$(date +%y.%m.%d)"
 fi
 
-# 追加版本配置，覆盖任何之前的设置
-# 如果您想保留 "ImmortalWRT" 发行版名称，请注释掉下一行
 echo "CONFIG_VERSION_DIST=\"MyWRT\"" >> .config
 echo "CONFIG_VERSION_MANUFACTURER=\"Kinsum@$VERSION_NUMBER\"" >> .config
 echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> .config
 echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> .config
-
-# 重新合并配置（使新追加的配置生效）
+# 重新合并配置
 make oldconfig
 
 # 如果目标是 x86_64，修改 distfeeds
@@ -306,154 +502,3 @@ find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi
 if [[ -d action_build ]]; then
     make clean
 fi
-
-# ============================================
-# 🎛️ 修改 athena_led 默认配置
-# ============================================
-ATHENA_CFG="./files/etc/config/athena_led"
-
-if [ -f "$ATHENA_CFG" ]; then
-    sed -i "s/option value '.*'/option value 'Kinsum love you.'/" "$ATHENA_CFG"
-    sed -i "s/option lightLevel '.*'/option lightLevel '3'/" "$ATHENA_CFG"
-    echo "✅ athena_led 配置已修改：文本='Kinsum love you.'，亮度=3"
-else
-    echo "⚠️ 未找到 athena_led 配置文件，路径：$ATHENA_CFG"
-fi
-
-
-# ========== 修改 banner 登录欢迎信息（防重复） ==========
-BANNER_FILE="package/base-files/files/etc/banner"
-if [ -f "$BANNER_FILE" ]; then
-    if grep -q "Compiled by Kinsum" "$BANNER_FILE"; then
-        echo "Banner already modified, skipping."
-    else
-        cat >> "$BANNER_FILE" << "EOF"
------------------------------------------------
-  Firmware: JDC
-  Compiled by Kinsum @ $(TZ=UTC-8 date '+%Y-%m-%d %H:%M:%S')
------------------------------------------------
-EOF
-    fi
-else
-    echo "⚠️  $BANNER_FILE not found, skip banner modification"
-fi
-
-# ======================== 定时开关灯 ========================
-mkdir -p ./files/etc/crontabs
-cat > ./files/etc/crontabs/root << "EOF"
-# 每天 23:00 关闭 LED
-0 23 * * * uci set athena_led.config.enable='0' && uci commit athena_led && /etc/init.d/athena_led reload
-# 每天 07:00 开启 LED
-0 7 * * * uci set athena_led.config.enable='1' && uci commit athena_led && /etc/init.d/athena_led reload
-EOF
-
-# ======================== LED 按键控制（增强版） ========================
-mkdir -p ./files/etc
-cat > ./files/etc/led_toggle.sh << "EOF"
-#!/bin/sh
-LED_STATE_FILE="/tmp/led_state"
-
-led_off() {
-    for led in /sys/class/leds/*; do
-        [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
-        [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
-    done
-}
-
-led_on() {
-    for led in /sys/class/leds/*; do
-        [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
-    done
-}
-
-if [ -f "$LED_STATE_FILE" ]; then
-    STATE=$(cat "$LED_STATE_FILE")
-else
-    STATE="1"
-fi
-
-if [ "$STATE" = "1" ]; then
-    led_off
-    echo "0" > "$LED_STATE_FILE"
-else
-    led_on
-    echo "1" > "$LED_STATE_FILE"
-fi
-EOF
-chmod +x ./files/etc/led_toggle.sh
-
-mkdir -p ./files/etc/hotplug.d/button
-cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
-#!/bin/sh
-# 按键 LED 开关（防抖，适配所有常见键值）
-
-case "$ACTION" in
-    pressed)
-        LAST=$(cat /tmp/button_last_time 2>/dev/null)
-        NOW=$(cut -d '.' -f 1 /proc/uptime)
-        if [ -n "$LAST" ] && [ $((NOW - LAST)) -lt 1 ]; then
-            exit 0
-        fi
-        echo "$NOW" > /tmp/button_last_time
-
-        case "$BUTTON" in
-            BTN_*|mesh|wps|reset)
-                /etc/led_toggle.sh &
-                ;;
-        esac
-        ;;
-esac
-EOF
-chmod +x ./files/etc/hotplug.d/button/01-mesh-led
-
-# ========== 京东云 eMMC p27 首次格式化 + 自动挂载 ==========
-mkdir -p ./files/etc/init.d
-cat > ./files/etc/init.d/format_p27 << 'EOF'
-#!/bin/sh /etc/rc.common
-START=95
-STOP=10
-
-PARTITION="/dev/mmcblk0p27"
-MOUNT_POINT="/opt"
-FS_TYPE="ext4"
-STAMP="/etc/.p27_formatted"
-
-start() {
-    if [ ! -b "$PARTITION" ]; then
-        logger -t "format_p27" "Partition $PARTITION not found, exit."
-        return 1
-    fi
-
-    if mount | grep -q "$PARTITION"; then
-        logger -t "format_p27" "$PARTITION already mounted, nothing to do."
-        return 0
-    fi
-
-    if [ ! -f "$STAMP" ]; then
-        logger -t "format_p27" "First boot detected, formatting $PARTITION to $FS_TYPE..."
-        echo "y" | mkfs.ext4 "$PARTITION" || {
-            logger -t "format_p27" "Format failed!"
-            return 1
-        }
-        touch "$STAMP"
-        logger -t "format_p27" "Format complete, stamp created."
-    else
-        logger -t "format_p27" "Already formatted, mounting..."
-    fi
-
-    mkdir -p "$MOUNT_POINT"
-    mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
-        logger -t "format_p27" "Mount failed!"
-        return 1
-    }
-    logger -t "format_p27" "Mounted $PARTITION to $MOUNT_POINT"
-
-    if ! grep -q "$PARTITION" /etc/fstab; then
-        echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
-    fi
-}
-EOF
-chmod +x ./files/etc/init.d/format_p27
-
-# 启用开机自启
-ln -sf /etc/init.d/format_p27 ./files/etc/rc.d/S95format_p27 2>/dev/null || true
