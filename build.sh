@@ -306,3 +306,18 @@ find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi
 if [[ -d action_build ]]; then
     make clean
 fi
+
+# ============================================
+# 🎛️ 修改 athena_led 默认配置
+# ============================================
+ATHENA_CFG="./files/etc/config/athena_led"
+
+if [ -f "$ATHENA_CFG" ]; then
+    sed -i "s/option value '.*'/option value 'Kinsum love you.'/" "$ATHENA_CFG"
+    sed -i "s/option lightLevel '.*'/option lightLevel '3'/" "$ATHENA_CFG"
+    echo "✅ athena_led 配置已修改：文本='Kinsum love you.'，亮度=3"
+else
+    echo "⚠️ 未找到 athena_led 配置文件，路径：$ATHENA_CFG"
+fi
+
+
