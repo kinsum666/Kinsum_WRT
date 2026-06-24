@@ -321,3 +321,139 @@ else
 fi
 
 
+# ========== 修改 banner 登录欢迎信息（防重复） ==========
+BANNER_FILE="package/base-files/files/etc/banner"
+if [ -f "$BANNER_FILE" ]; then
+    if grep -q "Compiled by Kinsum" "$BANNER_FILE"; then
+        echo "Banner already modified, skipping."
+    else
+        cat >> "$BANNER_FILE" << "EOF"
+-----------------------------------------------
+  Firmware: JDC
+  Compiled by Kinsum @ $(TZ=UTC-8 date '+%Y-%m-%d %H:%M:%S')
+-----------------------------------------------
+EOF
+    fi
+else
+    echo "⚠️  $BANNER_FILE not found, skip banner modification"
+fi
+
+# ======================== 定时开关灯 ========================
+mkdir -p ./files/etc/crontabs
+cat > ./files/etc/crontabs/root << "EOF"
+# 每天 23:00 关闭 LED
+0 23 * * * uci set athena_led.config.enable='0' && uci commit athena_led && /etc/init.d/athena_led reload
+# 每天 07:00 开启 LED
+0 7 * * * uci set athena_led.config.enable='1' && uci commit athena_led && /etc/init.d/athena_led reload
+EOF
+
+# ======================== LED 按键控制（增强版） ========================
+mkdir -p ./files/etc
+cat > ./files/etc/led_toggle.sh << "EOF"
+#!/bin/sh
+LED_STATE_FILE="/tmp/led_state"
+
+led_off() {
+    for led in /sys/class/leds/*; do
+        [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
+        [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
+    done
+}
+
+led_on() {
+    for led in /sys/class/leds/*; do
+        [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
+    done
+}
+
+if [ -f "$LED_STATE_FILE" ]; then
+    STATE=$(cat "$LED_STATE_FILE")
+else
+    STATE="1"
+fi
+
+if [ "$STATE" = "1" ]; then
+    led_off
+    echo "0" > "$LED_STATE_FILE"
+else
+    led_on
+    echo "1" > "$LED_STATE_FILE"
+fi
+EOF
+chmod +x ./files/etc/led_toggle.sh
+
+mkdir -p ./files/etc/hotplug.d/button
+cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
+#!/bin/sh
+# 按键 LED 开关（防抖，适配所有常见键值）
+
+case "$ACTION" in
+    pressed)
+        LAST=$(cat /tmp/button_last_time 2>/dev/null)
+        NOW=$(cut -d '.' -f 1 /proc/uptime)
+        if [ -n "$LAST" ] && [ $((NOW - LAST)) -lt 1 ]; then
+            exit 0
+        fi
+        echo "$NOW" > /tmp/button_last_time
+
+        case "$BUTTON" in
+            BTN_*|mesh|wps|reset)
+                /etc/led_toggle.sh &
+                ;;
+        esac
+        ;;
+esac
+EOF
+chmod +x ./files/etc/hotplug.d/button/01-mesh-led
+
+# ========== 京东云 eMMC p27 首次格式化 + 自动挂载 ==========
+mkdir -p ./files/etc/init.d
+cat > ./files/etc/init.d/format_p27 << 'EOF'
+#!/bin/sh /etc/rc.common
+START=95
+STOP=10
+
+PARTITION="/dev/mmcblk0p27"
+MOUNT_POINT="/opt"
+FS_TYPE="ext4"
+STAMP="/etc/.p27_formatted"
+
+start() {
+    if [ ! -b "$PARTITION" ]; then
+        logger -t "format_p27" "Partition $PARTITION not found, exit."
+        return 1
+    fi
+
+    if mount | grep -q "$PARTITION"; then
+        logger -t "format_p27" "$PARTITION already mounted, nothing to do."
+        return 0
+    fi
+
+    if [ ! -f "$STAMP" ]; then
+        logger -t "format_p27" "First boot detected, formatting $PARTITION to $FS_TYPE..."
+        echo "y" | mkfs.ext4 "$PARTITION" || {
+            logger -t "format_p27" "Format failed!"
+            return 1
+        }
+        touch "$STAMP"
+        logger -t "format_p27" "Format complete, stamp created."
+    else
+        logger -t "format_p27" "Already formatted, mounting..."
+    fi
+
+    mkdir -p "$MOUNT_POINT"
+    mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+        logger -t "format_p27" "Mount failed!"
+        return 1
+    }
+    logger -t "format_p27" "Mounted $PARTITION to $MOUNT_POINT"
+
+    if ! grep -q "$PARTITION" /etc/fstab; then
+        echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
+    fi
+}
+EOF
+chmod +x ./files/etc/init.d/format_p27
+
+# 启用开机自启
+ln -sf /etc/init.d/format_p27 ./files/etc/rc.d/S95format_p27 2>/dev/null || true
