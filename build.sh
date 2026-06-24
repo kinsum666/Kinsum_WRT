@@ -176,18 +176,70 @@ remove_uhttpd_dependency() {
 }
 
 apply_config() {
+    # 1. 复制设备基础配置
     \cp -f "$CONFIG_FILE" "$BASE_PATH/../$BUILD_DIR/.config"
-    
+    # 2. 若为 IPQ60xx/IPQ807x 且未启用 Git 镜像，追加 NSS 配置
     if grep -qE "(ipq60xx|ipq807x)" "$BASE_PATH/../$BUILD_DIR/.config" &&
         ! grep -q "CONFIG_GIT_MIRROR" "$BASE_PATH/../$BUILD_DIR/.config"; then
         cat "$BASE_PATH/deconfig/nss.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
     fi
-
+   # 3. 追加公共编译基础配置
     cat "$BASE_PATH/deconfig/compile_base.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-
+    # 4. 追加 Docker 依赖
     cat "$BASE_PATH/deconfig/docker_deps.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-
+  # 5. 追加代理配置（如有）
     cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
+   
+    # ========== 6. 自定义构建者信息（放在最后确保覆盖） ==========
+    # 优先使用 GitHub Actions 传入的 BUILD_DATE，否则使用当前日期
+    if [ -n "$BUILD_DATE" ]; then
+        VERSION_NUMBER="$BUILD_DATE"
+    else
+        VERSION_NUMBER="$(date +%y.%m.%d)"
+    fi
+
+    echo 'CONFIG_VERSION_DIST="MyWRT"' >> "$BASE_PATH/../$BUILD_DIR/.config"
+    echo 'CONFIG_VERSION_MANUFACTURER="Kinsum"' >> "$BASE_PATH/../$BUILD_DIR/.config"
+    echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> "$BASE_PATH/../$BUILD_DIR/.config"
+    echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> "$BASE_PATH/../$BUILD_DIR/.config"
+   # echo 'CONFIG_VERSION_BUG_URL="https://github.com/kinsum666/wrt_release/issues"' >> "$BASE_PATH/../$BUILD_DIR/.config"
+
+      # ========== 创建自定义默认配置（IP、密码、WiFi） ==========
+    local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
+    mkdir -p "$UCI_DEFAULTS_DIR"
+    cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
+#!/bin/sh
+# 设置 LAN IP
+uci set network.lan.ipaddr='192.168.188.1'
+uci commit network
+/etc/init.d/network restart
+
+# 设置 2.4G WiFi
+uci set wireless.radio0.disabled='0'
+uci set wireless.@wifi-iface[0].ssid='Titok'
+uci set wireless.@wifi-iface[0].key='yunding888'
+uci set wireless.@wifi-iface[0].encryption='psk2'
+
+# 设置 5G WiFi（如果存在 radio1）
+if uci get wireless.radio1 >/dev/null 2>&1; then
+    uci set wireless.radio1.disabled='0'
+    uci set wireless.@wifi-iface[1].ssid='Titok_5G'
+    uci set wireless.@wifi-iface[1].key='yunding888'
+    uci set wireless.@wifi-iface[1].encryption='psk2'
+fi
+uci commit wireless
+wifi
+
+# 设置 root 密码为 erlang
+(echo "erlang"; echo "erlang") | passwd root
+
+# 删除自身（首次启动后生效）
+rm -f /etc/uci-defaults/99-custom-settings
+EOF
+    chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
+
+
+    
 }
 
 REPO_URL=$(read_ini_by_key "REPO_URL")
