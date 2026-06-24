@@ -125,7 +125,7 @@ jobs:
         run: |
           # 获取缓存列表并删除
           gh cache list --key ${{ matrix.os }}-${{ hashFiles('**/repo_flag') }}- --json key --jq '.[] | .key' | while read -r key; do
-            gh cache delete "$key"
+            gh cache delete "$key" || true
           done
           # 输出缓存状态
           echo "========cache status========"
