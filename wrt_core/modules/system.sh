@@ -283,8 +283,10 @@ update_nss_pbuf_performance() {
 
 set_build_signature() {
     local file="$BUILD_DIR/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
-    if [ -d "$(dirname "$file")" ] && [ -f $file ]; then
-        sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ build by ZqinKing')/g" "$file"
+    if [ -f "$file" ]; then
+        # 优先使用 BUILD_DATE 环境变量，否则用当前时间（格式 YYYY.MM.DD）
+        local build_date="${BUILD_DATE:-$(date +%Y.%m.%d)}"
+        sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Build by Kinsum@${build_date}')/g" "$file"
     fi
 }
 
