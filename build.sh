@@ -446,6 +446,11 @@ remove_uhttpd_dependency
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
 
+# 下载 OpenClash Meta 内核
+if [ -f "$(dirname "$0")/diy-part.sh" ]; then
+    (cd "$BASE_PATH/../$BUILD_DIR" && "$(dirname "$0")/diy-part.sh")
+fi
+
 # 追加必要的包（用于分区格式化）
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
