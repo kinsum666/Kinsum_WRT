@@ -263,8 +263,12 @@ EOF
     cat > "$ATHENA_CFG" << 'EOF'
 config athena_led 'config'
     option enable '1'
-    option value 'Kinsum love you.'
-    option lightLevel '3'
+    option value 'Kinsum love you!'
+    option seconds '5'
+	option status 'time'
+    option lightLevel '2'
+    option tempFlag '4'
+    
 EOF
     echo "✅ athena_led 配置已创建"
 
@@ -275,7 +279,7 @@ EOF
             cat >> "$BANNER_FILE" << "EOF"
 -----------------------------------------------
   Firmware: JDC
-  Compiled by Kinsum @ $(TZ=UTC-8 date '+%Y-%m-%d %H:%M:%S')
+  Compiled by Kinsum @ 
 -----------------------------------------------
 EOF
             echo "✅ banner 已追加"
@@ -295,6 +299,29 @@ EOF
 0 7 * * * uci set athena_led.config.enable='3' && uci commit athena_led && /etc/init.d/athena_led reload
 EOF
     echo "✅ 定时开关灯 crontab 已配置"
+
+
+    # ======================== Mesh 按键切换 LED ========================
+    # 创建 rc.button 目录（如果不存在）
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button"
+
+    # 创建 mesh 按键脚本（设备可能使用不同的按键名，请根据实际情况调整）
+    # 常见按键名：BTN_0, BTN_1, key_mesh, mesh 等
+    # 你可以通过 `cat /proc/bus/input/devices` 查看设备对应的按键名
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button/mesh" << 'EOF'
+#!/bin/sh
+# 当 mesh 按键被按下时，切换 LED 状态
+if [ "$ACTION" = "pressed" ]; then
+    /etc/led_toggle.sh
+fi
+EOF
+
+    # 如果设备按键名不是 "mesh"，可以额外创建软链接或复制多个名称
+    # 例如，有些设备使用 "BTN_0"，可以创建指向 mesh 的软链接
+    # ln -sf /etc/rc.button/mesh "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button/BTN_0"
+
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button/mesh"
+    echo "✅ Mesh 按键脚本已创建"
 
 
     # ======================== LED 按键控制（三色指示灯专用） ========================
