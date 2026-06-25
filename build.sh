@@ -468,6 +468,36 @@ apply_config
 remove_uhttpd_dependency
 
 cd "$BASE_PATH/../$BUILD_DIR"
+
+# ========== 集成 rtp2httpd 源码 ==========
+# 将 rtp2httpd 仓库中的三个独立包复制到 package/ 根目录
+RTP2HTTPD_TMP="/tmp/rtp2httpd_repo"
+RTP2HTTPD_PACKAGES="luci-app-rtp2httpd taskd luci-lib-taskd"
+
+# 清理旧临时目录（避免残留）
+rm -rf "$RTP2HTTPD_TMP"
+git clone --depth=1 https://github.com/stackia/rtp2httpd.git "$RTP2HTTPD_TMP"
+
+for pkg in $RTP2HTTPD_PACKAGES; do
+    if [ -d "$RTP2HTTPD_TMP/$pkg" ]; then
+        rm -rf "package/$pkg"
+        cp -r "$RTP2HTTPD_TMP/$pkg" "package/"
+        echo "✅ 已复制 $pkg 到 package/"
+    else
+        echo "⚠️  源目录中未找到 $pkg，跳过"
+    fi
+done
+
+rm -rf "$RTP2HTTPD_TMP"
+echo "✅ rtp2httpd 相关包已集成到 package/"
+
+# 在 .config 中启用这些包（确保被选中）
+echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> .config
+echo "CONFIG_PACKAGE_taskd=y" >> .config
+echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
+
+
+# ===========================================
 make defconfig
 
 # 下载 OpenClash Meta 内核
