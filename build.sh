@@ -549,6 +549,8 @@ echo "✅ netem 相关包已集成到 package/"
 # 在 .config 中启用这些包（确保被选中）
 echo "CONFIG_PACKAGE_netem-control=y" >> .config
 echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
+echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
+echo "CONFIG_PACKAGE_tc=y" >> .config 
 
 # ===========================================
 make defconfig
