@@ -175,6 +175,7 @@ remove_uhttpd_dependency() {
     fi
 }
 
+
 apply_config() {
     # 1. 复制设备基础配置
     \cp -f "$CONFIG_FILE" "$BASE_PATH/../$BUILD_DIR/.config"
@@ -242,7 +243,7 @@ EOF
  
  # ========== 修改 default-settings 中的构建者信息 ==========
 
-echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+ # echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
 
 
     # ========== 修改 default-settings 中的构建者信息 ==========
@@ -479,32 +480,26 @@ echo "CONFIG_PACKAGE_taskd=y" >> .config
 echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
 
 
+
 # ========== 集成 netem 源码 ==========
-# 将 openwrt-netem 仓库中的两个独立包复制到 package/ 根目录
-#NETEM_TMP="/tmp/netem_repo"
-#NETEM_PACKAGES="netem-control luci-app-netem"
-
-# 清理旧临时目录
-#rm -rf "$NETEM_TMP"
-#git clone --depth=1 https://github.com/Connectify/openwrt-netem.git "$NETEM_TMP"
-
-#for pkg in $NETEM_PACKAGES; do
- #   if [ -d "$NETEM_TMP/$pkg" ]; then
-#        rm -rf "package/$pkg"
-#        cp -r "$NETEM_TMP/$pkg" "package/"
-#        echo "✅ 已复制 $pkg 到 package/"
-#    else
-#        echo "⚠️  源目录中未找到 $pkg，跳过"
-#    fi
-#done
-
-#rm -rf "$NETEM_TMP"
+NETEM_TMP="/tmp/netem_repo"
+NETEM_PACKAGES="netem-control luci-app-netem"
+rm -rf "$NETEM_TMP"
+git clone --depth=1 https://github.com/Connectify/openwrt-netem.git "$NETEM_TMP"
+for pkg in $NETEM_PACKAGES; do
+    if [ -d "$NETEM_TMP/$pkg" ]; then
+        rm -rf "package/$pkg"
+        cp -r "$NETEM_TMP/$pkg" "package/"
+        echo "✅ 已复制 $pkg 到 package/"
+    fi
+done
+rm -rf "$NETEM_TMP"
 #echo "✅ netem 相关包已集成到 package/"
 
 # 在 .config 中启用这些包（确保被选中）
-#echo "CONFIG_PACKAGE_netem-control=y" >> .config
-#echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
-#echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
+echo "CONFIG_PACKAGE_netem-control=y" >> .config
+echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
+echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
 #echo "CONFIG_PACKAGE_tc=y" >> .config 
 
 # ===========================================
