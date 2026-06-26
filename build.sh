@@ -301,100 +301,25 @@ EOF
     echo "✅ 定时开关灯 crontab 已配置"
 
 
-    # ======================== Mesh 按键切换 LED ========================
-    # 创建 rc.button 目录（如果不存在）
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button"
-
-    # 创建 mesh 按键脚本（设备可能使用不同的按键名，请根据实际情况调整）
-    # 常见按键名：BTN_0, BTN_1, key_mesh, mesh 等
-    # 你可以通过 `cat /proc/bus/input/devices` 查看设备对应的按键名
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button/mesh" << 'EOF'
-#!/bin/sh
-# 当 mesh 按键被按下时，切换 LED 状态
-if [ "$ACTION" = "pressed" ]; then
-    /etc/led_toggle.sh
-fi
-EOF
-
-    # 如果设备按键名不是 "mesh"，可以额外创建软链接或复制多个名称
-    # 例如，有些设备使用 "BTN_0"，可以创建指向 mesh 的软链接
-    # ln -sf /etc/rc.button/mesh "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button/BTN_0"
-
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/rc.button/mesh"
-    echo "✅ Mesh 按键脚本已创建"
-
-
-    # ======================== LED 按键控制（三色指示灯专用） ========================
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh" << "EOF"
+    # ======================== LED 按键控制（增强版） ========================
+mkdir -p ./files/etc
+cat > ./files/etc/led_toggle.sh << "EOF"
 #!/bin/sh
 LED_STATE_FILE="/tmp/led_state"
 
-# 查找三色LED节点（支持常见命名方式）
-find_color_led() {
-    local color=$1
-    # 尝试多种可能的命名模式
-    for pattern in ":$color" ":$color:" "$color" "*:$color" "*:$color:"; do
-        for led in /sys/class/leds/*; do
-            [ -d "$led" ] || continue
-            if echo "$led" | grep -q "$pattern"; then
-                echo "$led/brightness"
-                return 0
-            fi
-        done
-    done
-    # 如果找不到，尝试直接匹配包含颜色的节点名
+led_off() {
     for led in /sys/class/leds/*; do
-        [ -d "$led" ] || continue
-        if echo "$led" | grep -qi "$color"; then
-            echo "$led/brightness"
-            return 0
-        fi
+        [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
+        [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
     done
-    return 1
 }
 
-# 获取三色LED亮度文件路径
-RED_LED=$(find_color_led red)
-GREEN_LED=$(find_color_led green)
-BLUE_LED=$(find_color_led blue)
+led_on() {
+    for led in /sys/class/leds/*; do
+        [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
+    done
+}
 
-# 如果找不到颜色LED，则使用通配方式控制所有LED（兼容旧方案）
-if [ -z "$RED_LED" ] || [ -z "$GREEN_LED" ] || [ -z "$BLUE_LED" ]; then
-    logger -t "led_toggle" "Color LEDs not found, fallback to all LEDs"
-    get_leds() {
-        find /sys/class/leds -maxdepth 1 -type l ! -name "trigger" -exec basename {} \; 2>/dev/null
-    }
-    led_off() {
-        for led in $(get_leds); do
-            echo 0 > "/sys/class/leds/$led/brightness" 2>/dev/null
-        done
-        logger -t "led_toggle" "All LEDs turned OFF (fallback)"
-    }
-    led_on() {
-        for led in $(get_leds); do
-            echo 255 > "/sys/class/leds/$led/brightness" 2>/dev/null
-        done
-        logger -t "led_toggle" "All LEDs turned ON (fallback)"
-    }
-else
-    # 三色专用控制
-    led_off() {
-        echo 0 > "$RED_LED" 2>/dev/null
-        echo 0 > "$GREEN_LED" 2>/dev/null
-        echo 0 > "$BLUE_LED" 2>/dev/null
-        logger -t "led_toggle" "RGB LEDs turned OFF (R:0 G:0 B:0)"
-    }
-    led_on() {
-        # 设置为白色（255,255,255），也可以自定义，例如绿色（0,255,0）
-        echo 255 > "$RED_LED" 2>/dev/null
-        echo 255 > "$GREEN_LED" 2>/dev/null
-        echo 255 > "$BLUE_LED" 2>/dev/null
-        logger -t "led_toggle" "RGB LEDs turned ON (R:255 G:255 B:255)"
-    }
-fi
-
-# 切换状态
 if [ -f "$LED_STATE_FILE" ]; then
     STATE=$(cat "$LED_STATE_FILE")
 else
@@ -409,7 +334,31 @@ else
     echo "1" > "$LED_STATE_FILE"
 fi
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh"
+chmod +x ./files/etc/led_toggle.sh
+
+mkdir -p ./files/etc/hotplug.d/button
+cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
+#!/bin/sh
+# 按键 LED 开关（防抖，适配所有常见键值）
+
+case "$ACTION" in
+    pressed)
+        LAST=$(cat /tmp/button_last_time 2>/dev/null)
+        NOW=$(cut -d '.' -f 1 /proc/uptime)
+        if [ -n "$LAST" ] && [ $((NOW - LAST)) -lt 1 ]; then
+            exit 0
+        fi
+        echo "$NOW" > /tmp/button_last_time
+
+        case "$BUTTON" in
+            BTN_*|mesh|wps|reset)
+                /etc/led_toggle.sh &
+                ;;
+        esac
+        ;;
+esac
+EOF
+chmod +x ./files/etc/hotplug.d/button/01-mesh-led
 
     # ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
