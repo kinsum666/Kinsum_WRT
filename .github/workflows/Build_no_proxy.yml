@@ -114,7 +114,8 @@ jobs:
           echo "=================================================="
 
       - name: Build Firmware
-        run: ./build_no_proxy.sh ${{ inputs.model }}
+        
+        run: bash build_no_proxy.sh ${{ inputs.model }}
 
       - name: Get Kernel Verion
         run: |
