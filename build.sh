@@ -239,6 +239,12 @@ rm -f /etc/uci-defaults/99-custom-settings
 EOF
     chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
 
+ 
+ # ========== 修改 default-settings 中的构建者信息 ==========
+
+echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+
+
     # ========== 修改 default-settings 中的构建者信息 ==========
     if [ -n "$BUILD_DATE" ]; then
         VERSION_SUFFIX="$BUILD_DATE"
