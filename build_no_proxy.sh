@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# ========== 修改 default-settings 中的构建者信息 ==========
+
+echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+
 set -e
 
 # Determine wrt_core path
