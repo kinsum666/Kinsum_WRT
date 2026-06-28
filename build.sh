@@ -306,46 +306,73 @@ EOF
 EOF
     echo "✅ 定时开关灯 crontab 已配置"
 
-
-    # ======================== LED 按键控制（增强版） ========================
-mkdir -p ./files/etc
-cat > ./files/etc/led_toggle.sh << "EOF"
+    # ======================== LED 按键控制（增强版 - 颜色循环+关灯） ========================
+    mkdir -p ./files/etc
+    cat > ./files/etc/led_toggle.sh << "EOF"
 #!/bin/sh
-LED_STATE_FILE="/tmp/led_state"
+# 颜色代码 (R G B)
+COLOR_RED="255 0 0"
+COLOR_GREEN="0 255 0"
+COLOR_BLUE="0 0 255"
+COLOR_YELLOW="255 255 0"
+COLOR_PURPLE="255 0 255"
+COLOR_CYAN="0 255 255"
+COLOR_WHITE="255 255 255"
+COLOR_OFF="0 0 0"                 # 关灯
 
-led_off() {
-    for led in /sys/class/leds/*; do
-        [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
-        [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
+# 颜色列表（含关灯）
+COLORS="$COLOR_RED $COLOR_GREEN $COLOR_BLUE $COLOR_YELLOW $COLOR_PURPLE $COLOR_CYAN $COLOR_WHITE $COLOR_OFF"
+
+# 状态文件
+STATE_FILE="/tmp/led_color_state"
+
+# 自动查找 RGB LED 的 multi_intensity 文件
+find_color_file() {
+    # 已知雅典娜的可能路径
+    local candidates="/sys/devices/platform/soc/1100b000.spi/spi_master/spi1/spi1.0/leds/rgb:status/multi_intensity"
+    if [ -f "$candidates" ]; then
+        echo "$candidates"
+        return 0
+    fi
+    # 回退：搜索所有包含 rgb 的目录
+    for f in /sys/class/leds/*rgb*/multi_intensity 2>/dev/null; do
+        if [ -f "$f" ]; then
+            echo "$f"
+            return 0
+        fi
     done
+    return 1
 }
 
-led_on() {
-    for led in /sys/class/leds/*; do
-        [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
-    done
-}
-
-if [ -f "$LED_STATE_FILE" ]; then
-    STATE=$(cat "$LED_STATE_FILE")
-else
-    STATE="1"
+COLOR_FILE=$(find_color_file)
+if [ -z "$COLOR_FILE" ]; then
+    logger -t "led_toggle" "ERROR: Cannot find RGB LED control file."
+    exit 1
 fi
 
-if [ "$STATE" = "1" ]; then
-    led_off
-    echo "0" > "$LED_STATE_FILE"
+# 读取当前颜色索引
+if [ -f "$STATE_FILE" ]; then
+    CURRENT_INDEX=$(cat "$STATE_FILE")
 else
-    led_on
-    echo "1" > "$LED_STATE_FILE"
+    CURRENT_INDEX=0
 fi
+
+# 将字符串转为数组
+COLORS_ARRAY=($COLORS)
+NEXT_INDEX=$(( (CURRENT_INDEX + 1) % ${#COLORS_ARRAY[@]} ))
+
+# 应用新颜色
+echo ${COLORS_ARRAY[$NEXT_INDEX]} > "$COLOR_FILE"
+echo "$NEXT_INDEX" > "$STATE_FILE"
+
+logger -t "led_toggle" "Switched to color index $NEXT_INDEX (${COLORS_ARRAY[$NEXT_INDEX]})"
 EOF
-chmod +x ./files/etc/led_toggle.sh
+    chmod +x ./files/etc/led_toggle.sh
 
-mkdir -p ./files/etc/hotplug.d/button
-cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
+    mkdir -p ./files/etc/hotplug.d/button
+    cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
 #!/bin/sh
-# 按键 LED 开关（防抖，适配所有常见键值）
+# 按键 LED 颜色切换（适配 Joy 按键）
 
 case "$ACTION" in
     pressed)
@@ -356,15 +383,19 @@ case "$ACTION" in
         fi
         echo "$NOW" > /tmp/button_last_time
 
+        # 记录按键事件（便于调试）
+        logger -t "button-led" "Button pressed: $BUTTON"
+
         case "$BUTTON" in
-            BTN_*|mesh|wps|reset)
+            BTN_*|mesh|wps|reset|joy|JOY|BTN_1|BTN_2)
                 /etc/led_toggle.sh &
                 ;;
         esac
         ;;
 esac
 EOF
-chmod +x ./files/etc/hotplug.d/button/01-mesh-led
+    chmod +x ./files/etc/hotplug.d/button/01-mesh-led
+    # ============================================================
 
     # ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
@@ -429,6 +460,19 @@ EOF
     chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
     ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
+
+    # ========== 复制 status.cgi 到 /www/cgi-bin/ ==========
+    SOURCE_CGI="$BASE_PATH/modules/status.cgi"
+    if [ -f "$SOURCE_CGI" ]; then
+        TARGET_CGI_DIR="$BASE_PATH/../$BUILD_DIR/files/www/cgi-bin"
+        mkdir -p "$TARGET_CGI_DIR"
+        cp -f "$SOURCE_CGI" "$TARGET_CGI_DIR/"
+        chmod +x "$TARGET_CGI_DIR/status.cgi"
+        echo "✅ status.cgi 已复制并赋予执行权限"
+    else
+        echo "⚠️  status.cgi 未找到，跳过"
+    fi
+    # ========================================================
 
     echo "✅ apply_config: 所有自定义配置已完成"
 }
