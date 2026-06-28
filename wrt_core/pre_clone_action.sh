@@ -47,3 +47,18 @@ PROJECT_MIRRORS_FILE="$BUILD_DIR/scripts/projectsmirrors.json"
 if [ -f "$PROJECT_MIRRORS_FILE" ]; then
     sed -i '/.cn\//d; /tencent/d; /aliyun/d' "$PROJECT_MIRRORS_FILE"
 fi
+
+# ========== 新增：将 status.cgi 添加到固件文件系统 ==========
+# 源文件位于 wrt_core/modules/status.cgi
+SOURCE_CGI="$BASE_PATH/modules/status.cgi"
+if [ -f "$SOURCE_CGI" ]; then
+    # 目标目录：克隆源码中的 files/www/cgi-bin/
+    TARGET_DIR="$BUILD_DIR/files/www/cgi-bin"
+    mkdir -p "$TARGET_DIR"
+    cp -f "$SOURCE_CGI" "$TARGET_DIR/"
+    chmod +x "$TARGET_DIR/status.cgi"
+    echo "Copied status.cgi to $TARGET_DIR and set executable permission."
+else
+    echo "Warning: status.cgi not found at $SOURCE_CGI, skipping."
+fi
+# ===========================================================
