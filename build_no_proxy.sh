@@ -247,7 +247,7 @@ EOF
  
  # ========== 修改 default-settings 中的构建者信息 ==========
 
- # echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+ echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
 
 
     # ========== 修改 default-settings 中的构建者信息 ==========
