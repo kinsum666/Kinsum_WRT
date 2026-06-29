@@ -178,6 +178,25 @@ jobs:
           echo "插件：" >> release_body.txt
           grep -oP "luci-app(-[a-zA-Z0-9]{1,}){1,}" ./firmware/*.manifest | awk -F":" '{print $NF}' | paste -sd '; ' >> release_body.txt
       # rename
+
+
+
+     
+      - name: Prepare Upload Directory
+        run: |
+          mkdir -p ./upload
+
+        # 对于 n1_immwrt，openwrt_packit 可能将输出放在其他目录
+          if [ "${{ inputs.model }}" == "n1_immwrt" ] && [ -d "./openwrt_packit_output" ]; then
+            cp -r ./openwrt_packit_output/* ./firmware/
+        
+           fi
+
+    # 直接复制所有固件文件（包括 .manifest 等）到 upload 目录，**不重命名**
+          cp -r ./firmware/* ./upload/ 2>/dev/null || true
+      
+      
+      
       - name: Rename Firmware Files
         run: |
           # 创建 upload 目录用于存放重命名后的文件
@@ -203,7 +222,6 @@ jobs:
               mv "$FILE" "$NEWNAME"
             fi
           done
-
 
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
