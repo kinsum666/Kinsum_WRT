@@ -192,16 +192,16 @@ jobs:
           cp -r ./firmware/* ./upload/ 2>/dev/null || true
 
           # 进入 upload 目录，对每个文件重命名（添加型号和日期）
-          cd ./upload
-          for FILE in *.*; do
-            if [ -f "$FILE" ]; then
-              BASENAME="${FILE%.*}"
-              EXT="${FILE##*.}"
-              # 新文件名：原文件名_型号_日期.扩展名
-              NEWNAME="${BASENAME}_${{ inputs.model }}_${{ env.BUILD_DATE }}.${EXT}"
-              mv "$FILE" "$NEWNAME"
-            fi
-          done
+       #   cd ./upload
+     #     for FILE in *.*; do
+      #      if [ -f "$FILE" ]; then
+        #      BASENAME="${FILE%.*}"
+        #      EXT="${FILE##*.}"
+        #      # 新文件名：原文件名_型号_日期.扩展名
+        #      NEWNAME="${BASENAME}_${{ inputs.model }}_${{ env.BUILD_DATE }}.${EXT}"
+         #     mv "$FILE" "$NEWNAME"
+         #   fi
+        #  done
 
 
       - name: Release Firmware
