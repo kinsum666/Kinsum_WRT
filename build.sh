@@ -327,8 +327,9 @@ EOF
     echo "✅ 定时开关灯 crontab 已配置"
 
     # ======================== LED 按键控制（增强版 - 颜色循环+关灯） ========================
-    mkdir -p ./files/etc
-    cat > ./files/etc/led_toggle.sh << "EOF"
+    # 修正：使用 $BUILD_DIR 的绝对路径，确保文件被打包进固件
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh" << "EOF"
 #!/bin/sh
 # 颜色代码 (R G B)
 COLOR_RED="255 0 0"
@@ -387,10 +388,10 @@ echo "$NEXT_INDEX" > "$STATE_FILE"
 
 logger -t "led_toggle" "Switched to color index $NEXT_INDEX (${COLORS_ARRAY[$NEXT_INDEX]})"
 EOF
-    chmod +x ./files/etc/led_toggle.sh
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh"
 
-    mkdir -p ./files/etc/hotplug.d/button
-    cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led" << "EOF"
 #!/bin/sh
 # 按键 LED 颜色切换（适配 Joy 按键）
 
@@ -414,10 +415,10 @@ case "$ACTION" in
         ;;
 esac
 EOF
-    chmod +x ./files/etc/hotplug.d/button/01-mesh-led
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led"
     # ============================================================
 
-    # ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
+    # ========== 通用 eMMC 数据分区自动格式化与挂载（增强版） ==========
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data" << 'EOF'
 #!/bin/sh /etc/rc.common
@@ -428,58 +429,100 @@ MOUNT_POINT="/opt"
 FS_TYPE="ext4"
 STAMP="/etc/.data_formatted"
 
+# 更智能的分区查找：优先查找最大的未挂载 mmcblk 分区
 find_partition() {
+    local part=""
+    # 1. 尝试常见的雅典娜分区
     for p in /dev/mmcblk0p27 /dev/mmcblk0p28 /dev/mmcblk1p1; do
-        [ -b "$p" ] && echo "$p" && return 0
+        [ -b "$p" ] && { echo "$p"; return 0; }
     done
+
+    # 2. 搜索所有 mmcblk 分区，排除已挂载的，选择最大的（通常是用户数据区）
+    for p in /dev/mmcblk[0-9]p*; do
+        [ -b "$p" ] || continue
+        # 跳过已挂载的分区
+        mount | grep -q "$p" && continue
+        # 跳过 boot 分区（通常很小）
+        size=$(blockdev --getsz "$p" 2>/dev/null)
+        [ -z "$size" ] && continue
+        # 大于 1GB 的分区视为可能的数据区
+        if [ "$size" -gt 2000000 ]; then
+            part="$p"
+            break
+        fi
+    done
+
+    if [ -n "$part" ]; then
+        echo "$part"
+        return 0
+    fi
+
+    # 3. 回退：列出所有 mmcblk0p* 取最后一个
     local last=$(ls /dev/mmcblk0p* 2>/dev/null | sort -V | tail -1)
     [ -n "$last" ] && echo "$last" && return 0
+
     return 1
 }
 
 start() {
+    logger -t "format_data" "=== Starting data partition setup ==="
+
     PARTITION=$(find_partition)
     if [ -z "$PARTITION" ]; then
-        logger -t "format_data" "No suitable partition found. Skip."
+        logger -t "format_data" "ERROR: No suitable partition found. Skip."
         return 1
     fi
+    logger -t "format_data" "Using partition: $PARTITION"
 
     if mount | grep -q "$PARTITION"; then
         logger -t "format_data" "$PARTITION already mounted."
         return 0
     fi
 
+    # 检查文件系统类型
     FSTYPE=$(blkid -s TYPE -o value "$PARTITION" 2>/dev/null)
-    if [ "$FSTYPE" != "$FS_TYPE" ] && [ ! -f "$STAMP" ]; then
+    logger -t "format_data" "Current filesystem: ${FSTYPE:-none}"
+
+    # 如果不存在标记文件且文件系统不是 ext4，则格式化
+    if [ ! -f "$STAMP" ] && [ "$FSTYPE" != "$FS_TYPE" ]; then
         logger -t "format_data" "Formatting $PARTITION as $FS_TYPE..."
-        mkfs.ext4 -F "$PARTITION" || {
+        if mkfs.ext4 -F "$PARTITION" >/dev/null 2>&1; then
+            touch "$STAMP"
+            logger -t "format_data" "Format completed."
+        else
             logger -t "format_data" "Format failed!"
             return 1
-        }
-        touch "$STAMP"
-        logger -t "format_data" "Format completed."
+        fi
     else
-        logger -t "format_data" "Partition already has $FSTYPE or stamp exists, skipping format."
+        logger -t "format_data" "Partition already $FS_TYPE or stamp exists, skipping format."
     fi
 
+    # 挂载
     mkdir -p "$MOUNT_POINT"
-    mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+    if mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null; then
+        logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
+    else
         sleep 2
-        mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+        if mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null; then
+            logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT (retry)"
+        else
             logger -t "format_data" "Mount failed!"
             return 1
-        }
-    }
-    logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
+        fi
+    fi
 
+    # 写入 fstab（避免重复）
     if ! grep -q "$PARTITION" /etc/fstab; then
         echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
+        logger -t "format_data" "Added to fstab"
     fi
 }
 EOF
     chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
     ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
+    echo "✅ format_data 已配置（增强版）"
+    # ============================================================
 
     # ========== 复制 status.cgi 到 /www/cgi-bin/ ==========
     SOURCE_CGI="$BASE_PATH/modules/status.cgi"
@@ -543,17 +586,14 @@ echo "CONFIG_PACKAGE_taskd=y" >> .config
 echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
 
 
-# ========== 集成 netem 源码 ==========
-# 将 openwrt-netem 仓库中的两个独立包复制到 package/ 根目录
+# ========== 集成 netem 源码（注释掉） ==========
+# 如需启用，取消注释以下内容
 #NETEM_TMP="/tmp/netem_repo"
 #NETEM_PACKAGES="netem-control luci-app-netem"
-
-# 清理旧临时目录
 #rm -rf "$NETEM_TMP"
 #git clone --depth=1 https://github.com/Connectify/openwrt-netem.git "$NETEM_TMP"
-
 #for pkg in $NETEM_PACKAGES; do
- #   if [ -d "$NETEM_TMP/$pkg" ]; then
+#    if [ -d "$NETEM_TMP/$pkg" ]; then
 #        rm -rf "package/$pkg"
 #        cp -r "$NETEM_TMP/$pkg" "package/"
 #        echo "✅ 已复制 $pkg 到 package/"
@@ -561,11 +601,8 @@ echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
 #        echo "⚠️  源目录中未找到 $pkg，跳过"
 #    fi
 #done
-
 #rm -rf "$NETEM_TMP"
 #echo "✅ netem 相关包已集成到 package/"
-
-# 在 .config 中启用这些包（确保被选中）
 #echo "CONFIG_PACKAGE_netem-control=y" >> .config
 #echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
 #echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
