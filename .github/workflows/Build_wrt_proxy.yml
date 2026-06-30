@@ -1,4 +1,4 @@
-name: Release WRT
+name: WRT-with_proxy
 run-name: Release - ${{ inputs.model }}
 
 on:
