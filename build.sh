@@ -281,6 +281,7 @@ EOF
     echo "✅ athena_led 配置已创建"
 
 # ========== 修改 banner 登录欢迎信息 ==========
+# ========== 修改 banner 登录欢迎信息 ==========
 BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
 
 # 1. 打印实际路径，方便调试确认是否正确
@@ -296,13 +297,13 @@ cat > "$BANNER_FILE" << EOF
 |  \      |  \                                            
 | **   __  \** _______    _______  __    __  ______ ____  
 | **  /  \|  \|       \  /       \|  \  |  \|      \    \ 
-| **_/  **| **| *******\|  *******| **  | **| ******\****\
+| **_/  **| **| *******\|  *******| **  | **| ******\**** \
 | **   ** | **| **  | ** \**    \ | **  | **| ** | ** | **
 | ******\ | **| **  | ** _\******\| **__/ **| ** | ** | **
 | **  \**\| **| **  | **|       ** \**    **| ** | ** | **
  \**   \** \** \**   \** \*******   \******  \**  \**  \**
                                                           
-                                                                                                                                                                                                                                                                                            
+																																																																					
 -----------------------------------------------------
   Firmware compiled by Kinsum @ $(date '+%Y-%m-%d ')
 -----------------------------------------------------
@@ -315,7 +316,7 @@ else
     echo "ERROR: Failed to update banner."
 fi
 
-		
+	
     # ======================== 定时开关灯 ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs/root" << "EOF"
@@ -326,77 +327,60 @@ fi
 EOF
     echo "✅ 定时开关灯 crontab 已配置"
 
-    # ======================== LED 按键控制（增强版 - 颜色循环+关灯） ========================
-    # 修正：使用 $BUILD_DIR 的绝对路径，确保文件被打包进固件
+
+    # ======================== 按键功能：wps 控制底部灯光 ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh" << "EOF"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/rgb_toggle.sh" << "EOF"
 #!/bin/sh
-# 颜色代码 (R G B)
-COLOR_RED="255 0 0"
-COLOR_GREEN="0 255 0"
-COLOR_BLUE="0 0 255"
-COLOR_YELLOW="255 255 0"
-COLOR_PURPLE="255 0 255"
-COLOR_CYAN="0 255 255"
-COLOR_WHITE="255 255 255"
-COLOR_OFF="0 0 0"                 # 关灯
-
-# 颜色列表（含关灯）
-COLORS="$COLOR_RED $COLOR_GREEN $COLOR_BLUE $COLOR_YELLOW $COLOR_PURPLE $COLOR_CYAN $COLOR_WHITE $COLOR_OFF"
-
-# 状态文件
-STATE_FILE="/tmp/led_color_state"
-
-# 自动查找 RGB LED 的 multi_intensity 文件
-find_color_file() {
-    # 已知雅典娜的可能路径
-    local candidates="/sys/devices/platform/soc/1100b000.spi/spi_master/spi1/spi1.0/leds/rgb:status/multi_intensity"
-    if [ -f "$candidates" ]; then
-        echo "$candidates"
-        return 0
-    fi
-    # 回退：搜索所有包含 rgb 的目录
-    for f in /sys/class/leds/*rgb*/multi_intensity 2>/dev/null; do
-        if [ -f "$f" ]; then
-            echo "$f"
-            return 0
-        fi
-    done
-    return 1
-}
-
-COLOR_FILE=$(find_color_file)
-if [ -z "$COLOR_FILE" ]; then
-    logger -t "led_toggle" "ERROR: Cannot find RGB LED control file."
-    exit 1
-fi
-
-# 读取当前颜色索引
-if [ -f "$STATE_FILE" ]; then
-    CURRENT_INDEX=$(cat "$STATE_FILE")
-else
-    CURRENT_INDEX=0
-fi
-
-# 将字符串转为数组
-COLORS_ARRAY=($COLORS)
-NEXT_INDEX=$(( (CURRENT_INDEX + 1) % ${#COLORS_ARRAY[@]} ))
-
-# 应用新颜色
-echo ${COLORS_ARRAY[$NEXT_INDEX]} > "$COLOR_FILE"
-echo "$NEXT_INDEX" > "$STATE_FILE"
-
-logger -t "led_toggle" "Switched to color index $NEXT_INDEX (${COLORS_ARRAY[$NEXT_INDEX]})"
+# 切换底部 RGB 灯光模式：0关、1呼吸、2常亮、3自定义（循环切换）
+CURRENT=$(uci get athena_led.config.enable 2>/dev/null)
+[ -z "$CURRENT" ] && CURRENT=0
+NEXT=$(( (CURRENT + 1) % 4 ))
+uci set athena_led.config.enable="$NEXT"
+uci commit athena_led
+/etc/init.d/athena_led restart
+logger -t "rgb_toggle" "RGB mode switched to $NEXT"
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh"
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/rgb_toggle.sh"
 
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led" << "EOF"
+    # ======================== 按键功能：BTN_1 切换屏幕显示内容 ========================
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/screen_toggle.sh" << "EOF"
 #!/bin/sh
-# 按键 LED 颜色切换（适配 Joy 按键）
+# 切换屏幕 LED 显示内容：time, date, weather, network, temp 等（循环）
+# 请根据实际设备支持的 status 值调整列表（可通过 uci show athena_led 查看）
+STATUS_LIST="time date weather network temp"
+CURRENT=$(uci get athena_led.config.status 2>/dev/null)
+[ -z "$CURRENT" ] && CURRENT="time"
 
+# 查找当前索引
+INDEX=0
+for s in $STATUS_LIST; do
+    if [ "$s" = "$CURRENT" ]; then
+        break
+    fi
+    INDEX=$((INDEX + 1))
+done
+# 计算下一个索引
+NEXT_INDEX=$(( (INDEX + 1) % $(echo $STATUS_LIST | wc -w) ))
+NEXT_STATUS=$(echo $STATUS_LIST | cut -d' ' -f$((NEXT_INDEX+1)))
+
+uci set athena_led.config.status="$NEXT_STATUS"
+uci commit athena_led
+/etc/init.d/athena_led restart
+logger -t "screen_toggle" "Screen display switched to $NEXT_STATUS"
+EOF
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/screen_toggle.sh"
+
+    # ======================== 热插拔事件处理（交换按键功能） ========================
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-custom-buttons" << "EOF"
+#!/bin/sh
+# 按键功能映射：
+#   wps   → 切换 RGB 灯光模式（关/呼吸/常亮/自定义）
+#   BTN_1 → 切换屏幕显示内容（时间/日期/天气/网络等）
 case "$ACTION" in
     pressed)
+        # 防抖动
         LAST=$(cat /tmp/button_last_time 2>/dev/null)
         NOW=$(cut -d '.' -f 1 /proc/uptime)
         if [ -n "$LAST" ] && [ $((NOW - LAST)) -lt 1 ]; then
@@ -404,18 +388,20 @@ case "$ACTION" in
         fi
         echo "$NOW" > /tmp/button_last_time
 
-        # 记录按键事件（便于调试）
-        logger -t "button-led" "Button pressed: $BUTTON"
+        logger -t "button-handler" "Button pressed: $BUTTON"
 
         case "$BUTTON" in
-            BTN_*|mesh|wps|reset|joy|JOY|BTN_1|BTN_2)
-                /etc/led_toggle.sh &
+            wps)
+                /etc/rgb_toggle.sh &
+                ;;
+            BTN_1)
+                /etc/screen_toggle.sh &
                 ;;
         esac
         ;;
 esac
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led"
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-custom-buttons"
     # ============================================================
 
     # ========== 通用 eMMC 数据分区自动格式化与挂载（增强版） ==========
@@ -672,3 +658,27 @@ find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi
 if [[ -d action_build ]]; then
     make clean
 fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
