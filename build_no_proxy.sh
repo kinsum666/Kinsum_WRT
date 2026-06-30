@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-# ========== 修改 default-settings 中的构建者信息 ==========
-
-echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
-
 set -e
 
 # Determine wrt_core path
@@ -179,7 +175,6 @@ remove_uhttpd_dependency() {
     fi
 }
 
-
 apply_config() {
     # 1. 复制设备基础配置
     \cp -f "$CONFIG_FILE" "$BASE_PATH/../$BUILD_DIR/.config"
@@ -193,7 +188,7 @@ apply_config() {
     # 4. 追加 Docker 依赖
     cat "$BASE_PATH/deconfig/docker_deps.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
     # 5. 追加代理配置（如有）
-   # cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
+    #  cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
 
     # ========== 创建自定义默认配置（IP、Netmask、DHCP、WiFi、主机名、密码） ==========
     local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
@@ -247,7 +242,9 @@ EOF
  
  # ========== 修改 default-settings 中的构建者信息 ==========
 
- echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
+
 
 
     # ========== 修改 default-settings 中的构建者信息 ==========
@@ -283,7 +280,6 @@ config athena_led 'config'
 EOF
     echo "✅ athena_led 配置已创建"
 
-    # ========== 修改 banner 登录欢迎信息 ==========
 # ========== 修改 banner 登录欢迎信息 ==========
 BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
 
@@ -305,10 +301,21 @@ cat > "$BANNER_FILE" << EOF
 | ******\ | **| **  | ** _\******\| **__/ **| ** | ** | **
 | **  \**\| **| **  | **|       ** \**    **| ** | ** | **
  \**   \** \** \**   \** \*******   \******  \**  \**  \**
-                                                                                                                                                                           
+                                                          
+                                                                                                                                                                                                                                                                                            
 -----------------------------------------------------
   Firmware compiled by Kinsum @ $(date '+%Y-%m-%d ')
 -----------------------------------------------------
+EOF
+
+# 4. 检查写入结果
+if [ $? -eq 0 ]; then
+    echo "Banner updated successfully with Kinsum."
+else
+    echo "ERROR: Failed to update banner."
+fi
+
+		
     # ======================== 定时开关灯 ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs/root" << "EOF"
@@ -319,46 +326,74 @@ cat > "$BANNER_FILE" << EOF
 EOF
     echo "✅ 定时开关灯 crontab 已配置"
 
-
-    # ======================== LED 按键控制（增强版） ========================
-mkdir -p ./files/etc
-cat > ./files/etc/led_toggle.sh << "EOF"
+    # ======================== LED 按键控制（增强版 - 颜色循环+关灯） ========================
+    # 修正：使用 $BUILD_DIR 的绝对路径，确保文件被打包进固件
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh" << "EOF"
 #!/bin/sh
-LED_STATE_FILE="/tmp/led_state"
+# 颜色代码 (R G B)
+COLOR_RED="255 0 0"
+COLOR_GREEN="0 255 0"
+COLOR_BLUE="0 0 255"
+COLOR_YELLOW="255 255 0"
+COLOR_PURPLE="255 0 255"
+COLOR_CYAN="0 255 255"
+COLOR_WHITE="255 255 255"
+COLOR_OFF="0 0 0"                 # 关灯
 
-led_off() {
-    for led in /sys/class/leds/*; do
-        [ -e "$led/brightness" ] && echo 0 > "$led/brightness" 2>/dev/null
-        [ -e "$led/trigger" ] && echo none > "$led/trigger" 2>/dev/null
+# 颜色列表（含关灯）
+COLORS="$COLOR_RED $COLOR_GREEN $COLOR_BLUE $COLOR_YELLOW $COLOR_PURPLE $COLOR_CYAN $COLOR_WHITE $COLOR_OFF"
+
+# 状态文件
+STATE_FILE="/tmp/led_color_state"
+
+# 自动查找 RGB LED 的 multi_intensity 文件
+find_color_file() {
+    # 已知雅典娜的可能路径
+    local candidates="/sys/devices/platform/soc/1100b000.spi/spi_master/spi1/spi1.0/leds/rgb:status/multi_intensity"
+    if [ -f "$candidates" ]; then
+        echo "$candidates"
+        return 0
+    fi
+    # 回退：搜索所有包含 rgb 的目录
+    for f in /sys/class/leds/*rgb*/multi_intensity 2>/dev/null; do
+        if [ -f "$f" ]; then
+            echo "$f"
+            return 0
+        fi
     done
+    return 1
 }
 
-led_on() {
-    for led in /sys/class/leds/*; do
-        [ -e "$led/trigger" ] && echo default-on > "$led/trigger" 2>/dev/null
-    done
-}
-
-if [ -f "$LED_STATE_FILE" ]; then
-    STATE=$(cat "$LED_STATE_FILE")
-else
-    STATE="1"
+COLOR_FILE=$(find_color_file)
+if [ -z "$COLOR_FILE" ]; then
+    logger -t "led_toggle" "ERROR: Cannot find RGB LED control file."
+    exit 1
 fi
 
-if [ "$STATE" = "1" ]; then
-    led_off
-    echo "0" > "$LED_STATE_FILE"
+# 读取当前颜色索引
+if [ -f "$STATE_FILE" ]; then
+    CURRENT_INDEX=$(cat "$STATE_FILE")
 else
-    led_on
-    echo "1" > "$LED_STATE_FILE"
+    CURRENT_INDEX=0
 fi
+
+# 将字符串转为数组
+COLORS_ARRAY=($COLORS)
+NEXT_INDEX=$(( (CURRENT_INDEX + 1) % ${#COLORS_ARRAY[@]} ))
+
+# 应用新颜色
+echo ${COLORS_ARRAY[$NEXT_INDEX]} > "$COLOR_FILE"
+echo "$NEXT_INDEX" > "$STATE_FILE"
+
+logger -t "led_toggle" "Switched to color index $NEXT_INDEX (${COLORS_ARRAY[$NEXT_INDEX]})"
 EOF
-chmod +x ./files/etc/led_toggle.sh
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/led_toggle.sh"
 
-mkdir -p ./files/etc/hotplug.d/button
-cat > ./files/etc/hotplug.d/button/01-mesh-led << "EOF"
+    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
+    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led" << "EOF"
 #!/bin/sh
-# 按键 LED 开关（防抖，适配所有常见键值）
+# 按键 LED 颜色切换（适配 Joy 按键）
 
 case "$ACTION" in
     pressed)
@@ -369,17 +404,21 @@ case "$ACTION" in
         fi
         echo "$NOW" > /tmp/button_last_time
 
+        # 记录按键事件（便于调试）
+        logger -t "button-led" "Button pressed: $BUTTON"
+
         case "$BUTTON" in
-            BTN_*|mesh|wps|reset)
+            BTN_*|mesh|wps|reset|joy|JOY|BTN_1|BTN_2)
                 /etc/led_toggle.sh &
                 ;;
         esac
         ;;
 esac
 EOF
-chmod +x ./files/etc/hotplug.d/button/01-mesh-led
+    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-mesh-led"
+    # ============================================================
 
-    # ========== 通用 eMMC 数据分区自动格式化与挂载 ==========
+    # ========== 通用 eMMC 数据分区自动格式化与挂载（增强版） ==========
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data" << 'EOF'
 #!/bin/sh /etc/rc.common
@@ -390,58 +429,113 @@ MOUNT_POINT="/opt"
 FS_TYPE="ext4"
 STAMP="/etc/.data_formatted"
 
+# 更智能的分区查找：优先查找最大的未挂载 mmcblk 分区
 find_partition() {
+    local part=""
+    # 1. 尝试常见的雅典娜分区
     for p in /dev/mmcblk0p27 /dev/mmcblk0p28 /dev/mmcblk1p1; do
-        [ -b "$p" ] && echo "$p" && return 0
+        [ -b "$p" ] && { echo "$p"; return 0; }
     done
+
+    # 2. 搜索所有 mmcblk 分区，排除已挂载的，选择最大的（通常是用户数据区）
+    for p in /dev/mmcblk[0-9]p*; do
+        [ -b "$p" ] || continue
+        # 跳过已挂载的分区
+        mount | grep -q "$p" && continue
+        # 跳过 boot 分区（通常很小）
+        size=$(blockdev --getsz "$p" 2>/dev/null)
+        [ -z "$size" ] && continue
+        # 大于 1GB 的分区视为可能的数据区
+        if [ "$size" -gt 2000000 ]; then
+            part="$p"
+            break
+        fi
+    done
+
+    if [ -n "$part" ]; then
+        echo "$part"
+        return 0
+    fi
+
+    # 3. 回退：列出所有 mmcblk0p* 取最后一个
     local last=$(ls /dev/mmcblk0p* 2>/dev/null | sort -V | tail -1)
     [ -n "$last" ] && echo "$last" && return 0
+
     return 1
 }
 
 start() {
+    logger -t "format_data" "=== Starting data partition setup ==="
+
     PARTITION=$(find_partition)
     if [ -z "$PARTITION" ]; then
-        logger -t "format_data" "No suitable partition found. Skip."
+        logger -t "format_data" "ERROR: No suitable partition found. Skip."
         return 1
     fi
+    logger -t "format_data" "Using partition: $PARTITION"
 
     if mount | grep -q "$PARTITION"; then
         logger -t "format_data" "$PARTITION already mounted."
         return 0
     fi
 
+    # 检查文件系统类型
     FSTYPE=$(blkid -s TYPE -o value "$PARTITION" 2>/dev/null)
-    if [ "$FSTYPE" != "$FS_TYPE" ] && [ ! -f "$STAMP" ]; then
+    logger -t "format_data" "Current filesystem: ${FSTYPE:-none}"
+
+    # 如果不存在标记文件且文件系统不是 ext4，则格式化
+    if [ ! -f "$STAMP" ] && [ "$FSTYPE" != "$FS_TYPE" ]; then
         logger -t "format_data" "Formatting $PARTITION as $FS_TYPE..."
-        mkfs.ext4 -F "$PARTITION" || {
+        if mkfs.ext4 -F "$PARTITION" >/dev/null 2>&1; then
+            touch "$STAMP"
+            logger -t "format_data" "Format completed."
+        else
             logger -t "format_data" "Format failed!"
             return 1
-        }
-        touch "$STAMP"
-        logger -t "format_data" "Format completed."
+        fi
     else
-        logger -t "format_data" "Partition already has $FSTYPE or stamp exists, skipping format."
+        logger -t "format_data" "Partition already $FS_TYPE or stamp exists, skipping format."
     fi
 
+    # 挂载
     mkdir -p "$MOUNT_POINT"
-    mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+    if mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null; then
+        logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
+    else
         sleep 2
-        mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" || {
+        if mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null; then
+            logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT (retry)"
+        else
             logger -t "format_data" "Mount failed!"
             return 1
-        }
-    }
-    logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
+        fi
+    fi
 
+    # 写入 fstab（避免重复）
     if ! grep -q "$PARTITION" /etc/fstab; then
         echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
+        logger -t "format_data" "Added to fstab"
     fi
 }
 EOF
     chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
     ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
+    echo "✅ format_data 已配置（增强版）"
+    # ============================================================
+
+    # ========== 复制 status.cgi 到 /www/cgi-bin/ ==========
+    SOURCE_CGI="$BASE_PATH/modules/status.cgi"
+    if [ -f "$SOURCE_CGI" ]; then
+        TARGET_CGI_DIR="$BASE_PATH/../$BUILD_DIR/files/www/cgi-bin"
+        mkdir -p "$TARGET_CGI_DIR"
+        cp -f "$SOURCE_CGI" "$TARGET_CGI_DIR/"
+        chmod +x "$TARGET_CGI_DIR/status.cgi"
+        echo "✅ status.cgi 已复制并赋予执行权限"
+    else
+        echo "⚠️  status.cgi 未找到，跳过"
+    fi
+    # ========================================================
 
     echo "✅ apply_config: 所有自定义配置已完成"
 }
@@ -492,26 +586,26 @@ echo "CONFIG_PACKAGE_taskd=y" >> .config
 echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
 
 
-
-# ========== 集成 netem 源码 ==========
-NETEM_TMP="/tmp/netem_repo"
-NETEM_PACKAGES="netem-control luci-app-netem"
-rm -rf "$NETEM_TMP"
-git clone --depth=1 https://github.com/Connectify/openwrt-netem.git "$NETEM_TMP"
-for pkg in $NETEM_PACKAGES; do
-    if [ -d "$NETEM_TMP/$pkg" ]; then
-        rm -rf "package/$pkg"
-        cp -r "$NETEM_TMP/$pkg" "package/"
-        echo "✅ 已复制 $pkg 到 package/"
-    fi
-done
-rm -rf "$NETEM_TMP"
+# ========== 集成 netem 源码（注释掉） ==========
+# 如需启用，取消注释以下内容
+#NETEM_TMP="/tmp/netem_repo"
+#NETEM_PACKAGES="netem-control luci-app-netem"
+#rm -rf "$NETEM_TMP"
+#git clone --depth=1 https://github.com/Connectify/openwrt-netem.git "$NETEM_TMP"
+#for pkg in $NETEM_PACKAGES; do
+#    if [ -d "$NETEM_TMP/$pkg" ]; then
+#        rm -rf "package/$pkg"
+#        cp -r "$NETEM_TMP/$pkg" "package/"
+#        echo "✅ 已复制 $pkg 到 package/"
+#    else
+#        echo "⚠️  源目录中未找到 $pkg，跳过"
+#    fi
+#done
+#rm -rf "$NETEM_TMP"
 #echo "✅ netem 相关包已集成到 package/"
-
-# 在 .config 中启用这些包（确保被选中）
-echo "CONFIG_PACKAGE_netem-control=y" >> .config
-echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
-echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
+#echo "CONFIG_PACKAGE_netem-control=y" >> .config
+#echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
+#echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
 #echo "CONFIG_PACKAGE_tc=y" >> .config 
 
 # ===========================================
