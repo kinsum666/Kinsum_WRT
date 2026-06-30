@@ -280,24 +280,40 @@ config athena_led 'config'
 EOF
     echo "✅ athena_led 配置已创建"
 
-    # ========== 修改 banner 登录欢迎信息 ==========
-    BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
-    if [ -f "$BANNER_FILE" ]; then
-        if ! grep -q "Compiled by Kinsum" "$BANNER_FILE"; then
-            cat >> "$BANNER_FILE" << "EOF"
------------------------------------------------
-  Firmware: JDC
-  Compiled by Kinsum @ 
------------------------------------------------
-EOF
-            echo "✅ banner 已追加"
-        else
-            echo "ℹ️ banner 已包含 Kinsum 信息，跳过"
-        fi
-    else
-        echo "⚠️  $BANNER_FILE not found, skip banner modification"
-    fi
+# ========== 修改 banner 登录欢迎信息 ==========
+BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
 
+# 1. 打印实际路径，方便调试确认是否正确
+echo "Banner target path: $BANNER_FILE"
+
+# 2. 确保目标目录存在（避免因目录不存在而写入失败）
+mkdir -p "$(dirname "$BANNER_FILE")"
+
+# 3. 写入个性化 Banner（注意：这里 << EOF 不带引号，以便 $(date) 能被Shell展开）
+cat > "$BANNER_FILE" << EOF
+
+ /$$       /$$                                            
+| $$      |__/                                            
+| $$   /$$ /$$ /$$$$$$$   /$$$$$$$ /$$   /$$ /$$$$$$/$$$$ 
+| $$  /$$/| $$| $$__  $$ /$$_____/| $$  | $$| $$_  $$_  $$
+| $$$$$$/ | $$| $$  \ $$|  $$$$$$ | $$  | $$| $$ \ $$ \ $$
+| $$_  $$ | $$| $$  | $$ \____  $$| $$  | $$| $$ | $$ | $$
+| $$ \  $$| $$| $$  | $$ /$$$$$$$/|  $$$$$$/| $$ | $$ | $$
+|__/  \__/|__/|__/  |__/|_______/  \______/ |__/ |__/ |__/
+                                                                                                                                                                           
+-----------------------------------------------------
+  Firmware compiled by Kinsum @ $(date '+%Y-%m-%d ')
+-----------------------------------------------------
+EOF
+
+# 4. 检查写入结果
+if [ $? -eq 0 ]; then
+    echo "Banner updated successfully with Kinsum."
+else
+    echo "ERROR: Failed to update banner."
+fi
+
+		
     # ======================== 定时开关灯 ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs/root" << "EOF"
