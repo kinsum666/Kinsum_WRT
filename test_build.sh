@@ -558,10 +558,9 @@ EOF
 
     # 强制写入版本信息
     cat >> .config << EOF
-CONFIG_VERSION_DIST="MyWRT"
+CONFIG_VERSION_DIST="KinWRT"
 CONFIG_VERSION_MANUFACTURER="Kinsum@$version_number"
 CONFIG_VERSION_NUMBER="$version_number"
-CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"
 EOF
 
     make oldconfig
