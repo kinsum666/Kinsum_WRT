@@ -140,7 +140,6 @@ main() {
     local build_root="$base_path/../$build_dir"
     # 构建日期（从环境变量获取，若无则生成）
     local build_date="${BUILD_DATE:-$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")}"
-    # 版本号
     local version_number="${build_date}"
 
     # ---- 3. 更新源码 ----
@@ -283,7 +282,6 @@ setup_build_info() {
     local build_root="$1"
     local version_number="$2"
     local maker="Kinsum@$version_number"
-    # 查找可能的 default-settings Makefile
     local makefiles=(
         "$build_root/package/emortal/default-settings/Makefile"
         "$build_root/package/immortalwrt/default-settings/Makefile"
@@ -494,14 +492,18 @@ remove_uhttpd_dependency() {
     fi
 }
 
-# ==================== 集成额外软件包 ====================
+# ==================== 集成额外软件包（修复版） ====================
 integrate_extra_packages() {
     local build_root="$1"
     echo ">>> Integrating rtp2httpd packages..."
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' RETURN
+    local tmp_dir=""
+    tmp_dir="$(mktemp -d)" || {
+        echo "ERROR: Failed to create temp directory" >&2
+        return 1
+    }
+    # ✅ 修复：使用安全展开，避免 unbound variable
+    trap 'rm -rf "${tmp_dir:-}"' RETURN
 
     git clone --depth=1 https://github.com/stackia/rtp2httpd.git "$tmp_dir" || {
         echo "ERROR: Failed to clone rtp2httpd" >&2
@@ -593,7 +595,7 @@ EOF
         }
     fi
 
-    # 修正 openwrt_release（已由版本变量覆盖，但仍做一次检查）
+    # 修正 openwrt_release
     local release_file
     release_file="$(find "$target_dir" -path "*/root-*/etc/openwrt_release" 2>/dev/null | head -1)"
     if [[ -f "$release_file" ]]; then
@@ -619,7 +621,6 @@ collect_firmware() {
         echo "WARNING: No target directory found, firmware may not be generated." >&2
     fi
 
-    # 删除可能的 Packages.manifest
     rm -f "$output_dir/Packages.manifest" 2>/dev/null || true
 }
 
