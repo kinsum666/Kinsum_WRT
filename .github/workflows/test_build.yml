@@ -114,7 +114,9 @@ jobs:
           echo "=================================================="
 
       - name: Build Firmware
-        run: ./test_build.sh ${{ inputs.model }}
+        run: |
+          chmod +x ./test_build.sh
+          ./test_build.sh ${{ inputs.model }}
 
       - name: Get Kernel Verion
         run: |
