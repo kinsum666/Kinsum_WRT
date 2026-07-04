@@ -242,7 +242,7 @@ EOF
  
  # ========== 修改 default-settings 中的构建者信息 ==========
 
-echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> feeds.conf.default
+echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
 echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
 
 
