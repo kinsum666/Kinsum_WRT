@@ -621,6 +621,17 @@ fi
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
 
+# ========== 禁用 GDB 以避免 libgmp.la 路径错误 ==========
+if grep -q "^CONFIG_GDB=y" .config; then
+    sed -i 's/^CONFIG_GDB=y/# CONFIG_GDB is not set/' .config
+    echo "✅ 已禁用 CONFIG_GDB"
+fi
+# 清理可能残留的错误 libgmp.la
+find "$BASE_PATH/../$BUILD_DIR/staging_dir" -name "libgmp.la" 2>/dev/null -exec rm -f {} \; || true
+echo "✅ 已清理可能错误的 libgmp.la"
+# ====================================================
+
+
 # 启用 rtp2httpd 相关包
 echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> .config
 echo "CONFIG_PACKAGE_taskd=y" >> .config
