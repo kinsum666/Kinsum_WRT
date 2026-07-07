@@ -239,12 +239,6 @@ rm -f /etc/uci-defaults/99-custom-settings
 EOF
     chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
 
- 
- # ========== 修改 default-settings 中的构建者信息 ==========
-echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
-echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
-
-
     # ========== 修改 default-settings 中的构建者信息 ==========
     if [ -n "$BUILD_DATE" ]; then
         VERSION_SUFFIX="$BUILD_DATE"
@@ -278,18 +272,17 @@ config athena_led 'config'
 EOF
     echo "✅ athena_led 配置已创建"
 
+    # ========== 修改 banner 登录欢迎信息 ==========
+    BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
 
-# ========== 修改 banner 登录欢迎信息 ==========
-BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
+    # 1. 打印实际路径，方便调试确认是否正确
+    echo "Banner target path: $BANNER_FILE"
 
-# 1. 打印实际路径，方便调试确认是否正确
-echo "Banner target path: $BANNER_FILE"
+    # 2. 确保目标目录存在（避免因目录不存在而写入失败）
+    mkdir -p "$(dirname "$BANNER_FILE")"
 
-# 2. 确保目标目录存在（避免因目录不存在而写入失败）
-mkdir -p "$(dirname "$BANNER_FILE")"
-
-# 3. 写入个性化 Banner（注意：这里 << EOF 不带引号，以便 $(date) 能被Shell展开）
-cat > "$BANNER_FILE" << EOF
+    # 3. 写入个性化 Banner（注意：这里 << EOF 不带引号，以便 $(date) 能被Shell展开）
+    cat > "$BANNER_FILE" << EOF
 
 Welcome to...
                                                                           
@@ -310,14 +303,13 @@ $$ | \$$\ $$ |$$ |  $$ |$$$$$$$  |\$$$$$$  |$$ | $$ | $$ |
 -----------------------------------------------------
 EOF
 
-# 4. 检查写入结果
-if [ $? -eq 0 ]; then
-    echo "Banner updated successfully with Kinsum."
-else
-    echo "ERROR: Failed to update banner."
-fi
+    # 4. 检查写入结果
+    if [ $? -eq 0 ]; then
+        echo "Banner updated successfully with Kinsum."
+    else
+        echo "ERROR: Failed to update banner."
+    fi
 
-	
     # ======================== 定时开关灯 ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs"
     cat > "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs/root" << "EOF"
@@ -327,7 +319,6 @@ fi
 0 7 * * * uci set athena_led.config.enable='3' && uci commit athena_led && /etc/init.d/athena_led reload
 EOF
     echo "✅ 定时开关灯 crontab 已配置"
-
 
     # ======================== 按键功能：wps 控制底部灯光 ========================
     mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
@@ -545,6 +536,11 @@ remove_uhttpd_dependency
 
 cd "$BASE_PATH/../$BUILD_DIR"
 
+# ========== 添加自定义 feeds 源 ==========
+echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
+echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
+echo "✅ 自定义 feeds 源已添加"
+
 # ========== 集成 rtp2httpd 源码 ==========
 # 将 rtp2httpd 仓库中的三个独立包复制到 package/ 根目录
 RTP2HTTPD_TMP="/tmp/rtp2httpd_repo"
@@ -567,11 +563,29 @@ done
 rm -rf "$RTP2HTTPD_TMP"
 echo "✅ rtp2httpd 相关包已集成到 package/"
 
-# 在 .config 中启用这些包（确保被选中）
-echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> .config
-echo "CONFIG_PACKAGE_taskd=y" >> .config
-echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
+# ========== 集成 WiFiPortal 插件 ==========
+echo "正在集成 WiFiPortal 插件..."
+WIFIPORTAL_TMP="/tmp/WiFiPortal_repo"
+rm -rf "$WIFIPORTAL_TMP"
+git clone --depth=1 https://github.com/wiwizcom/WiFiPortal.git "$WIFIPORTAL_TMP"
 
+# 复制插件核心目录到 package/ 下
+for pkg in dcc2-wiwiz eqos-master-wiwiz wifidog-wiwiz; do
+    if [ -d "$WIFIPORTAL_TMP/$pkg" ]; then
+        rm -rf "package/$pkg"
+        cp -r "$WIFIPORTAL_TMP/$pkg" "package/"
+        echo "✅ 已复制 $pkg 到 package/"
+    else
+        echo "⚠️  未找到 $pkg，跳过"
+    fi
+done
+rm -rf "$WIFIPORTAL_TMP"
+
+# 更新 feeds（非常重要，让OpenWrt识别新包）
+./scripts/feeds update -a
+./scripts/feeds install -a
+echo "✅ WiFiPortal 插件集成完成"
+# =======================================
 
 # ========== 集成 netem 源码（注释掉） ==========
 # 如需启用，取消注释以下内容
@@ -606,6 +620,21 @@ fi
 # 追加必要的包（用于分区格式化）
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
+
+# 启用 rtp2httpd 相关包
+echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> .config
+echo "CONFIG_PACKAGE_taskd=y" >> .config
+echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
+
+# 启用 WiFiPortal 相关包
+echo "CONFIG_PACKAGE_luci-app-eqos=y" >> .config
+echo "CONFIG_PACKAGE_wifidog-wiwiz=y" >> .config
+echo "CONFIG_PACKAGE_dcc2-wiwiz-nossl=y" >> .config
+echo "CONFIG_PACKAGE_autokick-wiwiz=y" >> .config
+# 确保 luci-ssl-openssl 等依赖也被选中
+echo "CONFIG_PACKAGE_luci-ssl-openssl=y" >> .config
+echo "CONFIG_PACKAGE_luci=y" >> .config
+echo "CONFIG_PACKAGE_luci-compat=y" >> .config
 
 # ========== 在 make defconfig 之后强制写入版本信息 ==========
 if [ -n "$BUILD_DATE" ]; then
@@ -659,27 +688,3 @@ find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi
 if [[ -d action_build ]]; then
     make clean
 fi
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
