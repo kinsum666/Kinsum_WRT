@@ -537,9 +537,9 @@ remove_uhttpd_dependency
 cd "$BASE_PATH/../$BUILD_DIR"
 
 # ========== 添加自定义 feeds 源 ==========
-echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
-echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
-echo "✅ 自定义 feeds 源已添加"
+# echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
+# echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
+echo "✅ 自定义 feeds 源已跳过（如需要请取消注释）"
 
 # ========== 集成 rtp2httpd 源码 ==========
 # 将 rtp2httpd 仓库中的三个独立包复制到 package/ 根目录
