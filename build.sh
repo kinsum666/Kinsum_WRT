@@ -536,7 +536,14 @@ remove_uhttpd_dependency
 
 cd "$BASE_PATH/../$BUILD_DIR"
 
-# ========== 添加自定义 feeds 源 ==========
+# ========== 强制禁用 GDB（在 defconfig 之前） ==========
+# 确保 .config 中 GDB 被关闭
+sed -i '/^CONFIG_GDB/d' .config
+echo "# CONFIG_GDB is not set" >> .config
+echo "✅ 已在 defconfig 前禁用 GDB"
+# ====================================================
+
+# ========== 添加自定义 feeds 源（注释掉） ==========
 # echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
 # echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
 echo "✅ 自定义 feeds 源已跳过（如需要请取消注释）"
@@ -612,25 +619,15 @@ echo "✅ WiFiPortal 插件集成完成"
 # ===========================================
 make defconfig
 
-# 下载 OpenClash Meta 内核
-if [ -f "$(dirname "$0")/diy-part.sh" ]; then
-    (cd "$BASE_PATH/../$BUILD_DIR" && "$(dirname "$0")/diy-part.sh")
-fi
+# ========== 再次确保 GDB 禁用（defconfig 可能覆盖） ==========
+sed -i '/^CONFIG_GDB/d' .config
+echo "# CONFIG_GDB is not set" >> .config
+echo "✅ defconfig 后再次禁用 GDB"
+# ============================================================
 
 # 追加必要的包（用于分区格式化）
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
-
-# ========== 禁用 GDB 以避免 libgmp.la 路径错误 ==========
-if grep -q "^CONFIG_GDB=y" .config; then
-    sed -i 's/^CONFIG_GDB=y/# CONFIG_GDB is not set/' .config
-    echo "✅ 已禁用 CONFIG_GDB"
-fi
-# 清理可能残留的错误 libgmp.la
-find "$BASE_PATH/../$BUILD_DIR/staging_dir" -name "libgmp.la" 2>/dev/null -exec rm -f {} \; || true
-echo "✅ 已清理可能错误的 libgmp.la"
-# ====================================================
-
 
 # 启用 rtp2httpd 相关包
 echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> .config
@@ -658,7 +655,23 @@ echo "CONFIG_VERSION_DIST=\"MyWRT\"" >> .config
 echo "CONFIG_VERSION_MANUFACTURER=\"Kinsum@$VERSION_NUMBER\"" >> .config
 echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> .config
 echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> .config
+
 make oldconfig
+
+# ========== 再次检查并修正 GDB（oldconfig 可能恢复） ==========
+if grep -q "^CONFIG_GDB=y" .config; then
+    sed -i '/^CONFIG_GDB/d' .config
+    echo "# CONFIG_GDB is not set" >> .config
+    echo "⚠️  oldconfig 恢复了 GDB，已再次禁用"
+    make oldconfig   # 重新调整依赖
+fi
+# 最后再确保一次
+if grep -q "^CONFIG_GDB=y" .config; then
+    echo "ERROR: 无法禁用 GDB，请手动检查 .config"
+    exit 1
+fi
+echo "✅ GDB 已彻底禁用"
+# ============================================================
 
 # 如果目标是 x86_64，修改 distfeeds
 if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
@@ -671,6 +684,12 @@ fi
 if [[ $Build_Mod == "debug" ]]; then
     exit 0
 fi
+
+# ========== 清理所有 .la 文件，消除 libtool 硬编码路径 ==========
+echo "清理 staging_dir 下所有 .la 文件，避免路径错误..."
+find "$BASE_PATH/../$BUILD_DIR/staging_dir" -name "*.la" -type f -delete
+echo "✅ .la 文件清理完成"
+# ================================================================
 
 TARGET_DIR="$BASE_PATH/../$BUILD_DIR/bin/targets"
 if [[ -d $TARGET_DIR ]]; then
