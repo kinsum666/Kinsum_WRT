@@ -536,13 +536,6 @@ remove_uhttpd_dependency
 
 cd "$BASE_PATH/../$BUILD_DIR"
 
-# ========== 强制禁用 GDB（在 defconfig 之前） ==========
-# 确保 .config 中 GDB 被关闭
-sed -i '/^CONFIG_GDB/d' .config
-echo "# CONFIG_GDB is not set" >> .config
-echo "✅ 已在 defconfig 前禁用 GDB"
-# ====================================================
-
 # ========== 添加自定义 feeds 源（注释掉） ==========
 # echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
 # echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
@@ -619,12 +612,6 @@ echo "✅ WiFiPortal 插件集成完成"
 # ===========================================
 make defconfig
 
-# ========== 再次确保 GDB 禁用（defconfig 可能覆盖） ==========
-sed -i '/^CONFIG_GDB/d' .config
-echo "# CONFIG_GDB is not set" >> .config
-echo "✅ defconfig 后再次禁用 GDB"
-# ============================================================
-
 # 追加必要的包（用于分区格式化）
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
@@ -657,21 +644,6 @@ echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> .config
 echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> .config
 
 make oldconfig
-
-# ========== 再次检查并修正 GDB（oldconfig 可能恢复） ==========
-if grep -q "^CONFIG_GDB=y" .config; then
-    sed -i '/^CONFIG_GDB/d' .config
-    echo "# CONFIG_GDB is not set" >> .config
-    echo "⚠️  oldconfig 恢复了 GDB，已再次禁用"
-    make oldconfig   # 重新调整依赖
-fi
-# 最后再确保一次
-if grep -q "^CONFIG_GDB=y" .config; then
-    echo "ERROR: 无法禁用 GDB，请手动检查 .config"
-    exit 1
-fi
-echo "✅ GDB 已彻底禁用"
-# ============================================================
 
 # 如果目标是 x86_64，修改 distfeeds
 if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
