@@ -1,213 +1,255 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# ==================== 全局配置 ====================
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly WRT_CORE_DIR="${WRT_CORE_DIR:-wrt_core}"          # 可由外部指定
+readonly FIRMWARE_OUTPUT_DIR="${FIRMWARE_OUTPUT_DIR:-firmware}"
+readonly DEFAULT_BUILD_MODE="normal"
 
-# Determine wrt_core path
-if [ -d "wrt_core" ]; then
-    WRT_CORE_PATH="wrt_core"
-elif [ -d "../wrt_core" ]; then
-    WRT_CORE_PATH="../wrt_core"
-else
-    echo "Error: wrt_core directory not found!"
-    exit 1
-fi
+# ==================== 路径检测 ====================
+detect_wrt_core() {
+    if [[ -d "$WRT_CORE_DIR" ]]; then
+        echo "$WRT_CORE_DIR"
+    elif [[ -d "../wrt_core" ]]; then
+        echo "../wrt_core"
+    else
+        echo "ERROR: wrt_core directory not found!" >&2
+        exit 1
+    fi
+}
 
-BASE_PATH=$(cd "$WRT_CORE_PATH" && pwd)
-
-Dev=$1
-Build_Mod=$2
-
-SUPPORTED_DEVS=()
-
-collect_supported_devs() {
-    local ini_file
-    local dev_key
-    local IFS
-
+# ==================== 设备列表 ====================
+declare -a SUPPORTED_DEVS=()
+load_supported_devs() {
+    local base_path="$1"
     SUPPORTED_DEVS=()
-
-    for ini_file in "$BASE_PATH"/compilecfg/*.ini; do
-        [[ -f "$ini_file" ]] || continue
-
-        dev_key=$(basename "$ini_file" .ini)
-        if [[ -f "$BASE_PATH/deconfig/$dev_key.config" ]]; then
+    for ini in "$base_path"/compilecfg/*.ini; do
+        [[ -f "$ini" ]] || continue
+        local dev_key
+        dev_key="$(basename "$ini" .ini)"
+        if [[ -f "$base_path/deconfig/$dev_key.config" ]]; then
             SUPPORTED_DEVS+=("$dev_key")
         fi
     done
+    # 排序
+    if [[ ${#SUPPORTED_DEVS[@]} -gt 0 ]]; then
+        mapfile -t SUPPORTED_DEVS < <(printf '%s\n' "${SUPPORTED_DEVS[@]}" | LC_ALL=C sort)
+    fi
+}
 
-    if [[ ${#SUPPORTED_DEVS[@]} -eq 0 ]]; then
-        return
+# ==================== 交互选择 ====================
+interactive_select_dev() {
+    local dev
+    PS3="Select device by number (or 'q' to quit): "
+    select dev in "${SUPPORTED_DEVS[@]}" "Quit"; do
+        case "$dev" in
+            Quit) echo "Cancelled."; exit 1 ;;
+            "") echo "Invalid selection. Try again." ;;
+            *) echo "$dev"; return 0 ;;
+        esac
+    done
+}
+
+interactive_select_mode() {
+    local mode
+    PS3="Select build mode (normal/debug): "
+    select mode in "normal" "debug"; do
+        case "$mode" in
+            normal) echo ""; return 0 ;;
+            debug)  echo "debug"; return 0 ;;
+            *) echo "Invalid selection. Try again." ;;
+        esac
+    done
+}
+
+# ==================== 配置读取 ====================
+read_ini_value() {
+    local key="$1"
+    local ini_file="$2"
+    awk -F"=" -v key="$key" '$1 == key {print $2}' "$ini_file"
+}
+
+# ==================== 主构建函数 ====================
+main() {
+    # ---- 1. 解析参数 / 交互 ----
+    local DEVICE="${1:-}"
+    local BUILD_MODE="${2:-}"
+
+    local base_path
+    base_path="$(cd "$(detect_wrt_core)" && pwd)"
+    load_supported_devs "$base_path"
+
+    if [[ -z "$DEVICE" ]]; then
+        if [[ ${#SUPPORTED_DEVS[@]} -eq 0 ]]; then
+            echo "ERROR: No supported devices found." >&2
+            exit 1
+        fi
+        if [[ ! -t 0 || ! -t 1 ]]; then
+            echo "Usage: $0 <device> [debug]" >&2
+            echo "Supported devices:" >&2
+            printf '  %s\n' "${SUPPORTED_DEVS[@]}" >&2
+            exit 1
+        fi
+        DEVICE="$(interactive_select_dev)"
+        if [[ -z "$BUILD_MODE" ]]; then
+            BUILD_MODE="$(interactive_select_mode)"
+        fi
     fi
 
-    IFS=$'\n' SUPPORTED_DEVS=($(printf '%s\n' "${SUPPORTED_DEVS[@]}" | LC_ALL=C sort))
-}
-
-print_usage() {
-    echo "Usage: $0 <device> [debug]"
-}
-
-print_supported_devs() {
-    local index
-
-    echo "Supported devices:"
-    for ((index = 0; index < ${#SUPPORTED_DEVS[@]}; index++)); do
-        printf "  %d) %s\n" "$((index + 1))" "${SUPPORTED_DEVS[index]}"
+    # 校验设备
+    local found=0
+    for d in "${SUPPORTED_DEVS[@]}"; do
+        if [[ "$d" == "$DEVICE" ]]; then
+            found=1
+            break
+        fi
     done
-}
-
-prompt_select_dev() {
-    local input
-    local selected_index
-
-    while true; do
-        print_supported_devs
-        printf "Select device by number (q to quit): "
-
-        if ! read -r input; then
-            echo
-            echo "Cancelled."
-            exit 1
-        fi
-
-        if [[ "$input" =~ ^[[:space:]]*[qQ][[:space:]]*$ ]]; then
-            echo "Cancelled."
-            exit 1
-        fi
-
-        if [[ "$input" =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
-            selected_index=${BASH_REMATCH[1]}
-            if ((selected_index >= 1 && selected_index <= ${#SUPPORTED_DEVS[@]})); then
-                Dev=${SUPPORTED_DEVS[selected_index - 1]}
-                return
-            fi
-        fi
-
-        echo "Invalid selection. Please enter a number between 1 and ${#SUPPORTED_DEVS[@]}."
-    done
-}
-
-prompt_select_build_mode() {
-    local input
-
-    while true; do
-        echo "Build mode:"
-        echo "  1) normal"
-        echo "  2) debug"
-        printf "Select build mode (1-2, q to quit): "
-
-        if ! read -r input; then
-            echo
-            echo "Cancelled."
-            exit 1
-        fi
-
-        if [[ "$input" =~ ^[[:space:]]*[qQ][[:space:]]*$ ]]; then
-            echo "Cancelled."
-            exit 1
-        fi
-
-        if [[ "$input" =~ ^[[:space:]]*1[[:space:]]*$ ]]; then
-            Build_Mod=""
-            return
-        fi
-
-        if [[ "$input" =~ ^[[:space:]]*2[[:space:]]*$ ]]; then
-            Build_Mod="debug"
-            return
-        fi
-
-        echo "Invalid selection. Please enter 1 or 2."
-    done
-}
-
-is_interactive_terminal() {
-    [[ -t 0 && -t 1 ]]
-}
-
-if [[ $# -eq 0 ]]; then
-    collect_supported_devs
-
-    if [[ ${#SUPPORTED_DEVS[@]} -eq 0 ]]; then
-        echo "Error: no supported devices found."
+    if [[ $found -eq 0 ]]; then
+        echo "ERROR: Device '$DEVICE' not supported." >&2
         exit 1
     fi
 
-    if ! is_interactive_terminal; then
-        print_usage
-        print_supported_devs
+    # ---- 2. 加载设备配置 ----
+    local config_file="$base_path/deconfig/$DEVICE.config"
+    local ini_file="$base_path/compilecfg/$DEVICE.ini"
+    if [[ ! -f "$config_file" ]]; then
+        echo "ERROR: Config not found: $config_file" >&2
+        exit 1
+    fi
+    if [[ ! -f "$ini_file" ]]; then
+        echo "ERROR: INI file not found: $ini_file" >&2
         exit 1
     fi
 
-    prompt_select_dev
+    # 读取关键配置
+    local repo_url build_dir commit_hash repo_branch
+    repo_url="$(read_ini_value "REPO_URL" "$ini_file")"
+    repo_branch="$(read_ini_value "REPO_BRANCH" "$ini_file")"
+    repo_branch="${repo_branch:-main}"
+    build_dir="$(read_ini_value "BUILD_DIR" "$ini_file")"
+    commit_hash="$(read_ini_value "COMMIT_HASH" "$ini_file")"
+    commit_hash="${commit_hash:-none}"
 
-    if [[ -z $Build_Mod ]]; then
-        prompt_select_build_mode
+    # 若存在 action_build，覆盖 build_dir
+    if [[ -d "action_build" ]]; then
+        build_dir="action_build"
     fi
-fi
 
-CONFIG_FILE="$BASE_PATH/deconfig/$Dev.config"
-INI_FILE="$BASE_PATH/compilecfg/$Dev.ini"
+    # 全局构建根目录
+    local build_root="$base_path/../$build_dir"
+    # 构建日期（从环境变量获取，若无则生成）
+    local build_date="${BUILD_DATE:-$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")}"
+    local version_number="${build_date}"
 
-if [[ ! -f $CONFIG_FILE ]]; then
-    echo "Config not found: $CONFIG_FILE"
-    exit 1
-fi
+    # ---- 3. 更新源码 ----
+    echo ">>> Updating source from $repo_url (branch $repo_branch)..."
+    "$base_path/update.sh" "$repo_url" "$repo_branch" "$build_dir" "$commit_hash"
 
-if [[ ! -f $INI_FILE ]]; then
-    echo "INI file not found: $INI_FILE"
-    exit 1
-fi
+    # ---- 4. 应用自定义配置 ----
+    apply_custom_config \
+        "$base_path" \
+        "$build_root" \
+        "$config_file" \
+        "$DEVICE" \
+        "$build_date" \
+        "$version_number"
 
-read_ini_by_key() {
-    local key=$1
-    awk -F"=" -v key="$key" '$1 == key {print $2}' "$INI_FILE"
+    # ---- 5. 集成额外软件包 ----
+    integrate_extra_packages "$build_root"
+
+    # ---- 6. 编译固件 ----
+    if [[ "$BUILD_MODE" == "debug" ]]; then
+        echo ">>> Debug mode: skipping build."
+        exit 0
+    fi
+
+    build_firmware "$base_path" "$build_root" "$config_file" "$version_number" "$DEVICE"
+
+    # ---- 7. 收集输出 ----
+    collect_firmware "$base_path" "$build_root"
+
+    # ---- 8. 清理（如 action_build） ----
+    if [[ -d "action_build" ]]; then
+        (cd "$build_root" && make clean) || true
+    fi
+
+    echo ">>> Build completed successfully."
 }
 
-remove_uhttpd_dependency() {
-    local config_path="$BASE_PATH/../$BUILD_DIR/.config"
-    local luci_makefile_path="$BASE_PATH/../$BUILD_DIR/feeds/luci/collections/luci/Makefile"
+# ==================== 自定义配置应用 ====================
+apply_custom_config() {
+    local base_path="$1"
+    local build_root="$2"
+    local config_file="$3"
+    local device="$4"
+    local build_date="$5"
+    local version_number="$6"
 
-    if grep -q "CONFIG_PACKAGE_luci-app-quickfile=y" "$config_path"; then
-        if [ -f "$luci_makefile_path" ]; then
-            sed -i '/luci-light/d' "$luci_makefile_path"
-            echo "Removed uhttpd (luci-light) dependency as luci-app-quickfile (nginx) is enabled."
-        fi
-    fi
-}
+    echo ">>> Applying custom configuration for $device..."
 
-apply_config() {
-    # 1. 复制设备基础配置
-    \cp -f "$CONFIG_FILE" "$BASE_PATH/../$BUILD_DIR/.config"
+    # 1. 复制基础配置
+    cp -f "$config_file" "$build_root/.config"
+
     # 2. 若为 IPQ60xx/IPQ807x 且未启用 Git 镜像，追加 NSS 配置
-    if grep -qE "(ipq60xx|ipq807x)" "$BASE_PATH/../$BUILD_DIR/.config" &&
-        ! grep -q "CONFIG_GIT_MIRROR" "$BASE_PATH/../$BUILD_DIR/.config"; then
-        cat "$BASE_PATH/deconfig/nss.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
+    if grep -qE "(ipq60xx|ipq807x)" "$build_root/.config" && \
+       ! grep -q "CONFIG_GIT_MIRROR" "$build_root/.config"; then
+        cat "$base_path/deconfig/nss.config" >> "$build_root/.config"
     fi
-    # 3. 追加公共编译基础配置
-    cat "$BASE_PATH/deconfig/compile_base.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-    # 4. 追加 Docker 依赖
-    cat "$BASE_PATH/deconfig/docker_deps.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
-    # 5. 追加代理配置（如有）
-     # cat "$BASE_PATH/deconfig/proxy.config" >> "$BASE_PATH/../$BUILD_DIR/.config"
 
-    # ========== 创建自定义默认配置（IP、Netmask、DHCP、WiFi、主机名、密码） ==========
-    local UCI_DEFAULTS_DIR="$BASE_PATH/../$BUILD_DIR/files/etc/uci-defaults"
-    mkdir -p "$UCI_DEFAULTS_DIR"
-    cat > "$UCI_DEFAULTS_DIR/99-custom-settings" << 'EOF'
+    # 3. 追加公共编译基础配置、Docker 依赖、代理配置
+    cat "$base_path/deconfig/compile_base.config" \
+        "$base_path/deconfig/docker_deps.config" \
+        #"$base_path/deconfig/proxy.config" >> "$build_root/.config" 2>/dev/null || true
+
+    # 4. 创建 uci-defaults 自定义设置（IP、WiFi、密码等）
+    setup_uci_defaults "$build_root"
+
+    # 5. 修改 default-settings 中的构建者信息
+    setup_build_info "$build_root" "$version_number"
+
+    # 6. 配置 athena_led
+    setup_athena_led "$build_root"
+
+    # 7. 更新 banner
+    setup_banner "$build_root"
+
+    # 8. 配置 crontab（定时开关灯）
+    setup_cron "$build_root"
+
+    # 9. 配置按键功能（WPS、BTN_1）
+    setup_button_handlers "$build_root"
+
+    # 10. 配置 eMMC 数据分区自动格式化与挂载
+    setup_data_partition "$build_root"
+
+    # 11. 复制 status.cgi
+    copy_status_cgi "$base_path" "$build_root"
+
+    # 12. 添加 feeds 源
+    echo 'src-git netem https://github.com/Connectify/openwrt-netem' >> "$build_root/feeds.conf.default"
+    echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> "$build_root/feeds.conf.default"
+
+    echo ">>> Custom configuration applied."
+}
+
+# ------------------ 辅助函数（各配置项） ------------------
+setup_uci_defaults() {
+    local build_root="$1"
+    local uci_dir="$build_root/files/etc/uci-defaults"
+    mkdir -p "$uci_dir"
+    cat > "$uci_dir/99-custom-settings" << 'EOF'
 #!/bin/sh
-# 设置主机名
 uci set system.@system[0].hostname='Kinsum'
 uci commit system
 /etc/init.d/system restart
 
-# 设置 LAN IP 和子网掩码
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.188.1'
 uci set network.lan.netmask='255.255.255.0'
 uci commit network
 /etc/init.d/network restart
 
-# 配置 DHCP（dnsmasq）为 LAN 接口分配地址
 uci set dhcp.lan.start='100'
 uci set dhcp.lan.limit='150'
 uci set dhcp.lan.leasetime='12h'
@@ -215,13 +257,11 @@ uci set dhcp.lan.ignore='0'
 uci commit dhcp
 /etc/init.d/dnsmasq restart
 
-# 设置 2.4G WiFi
 uci set wireless.radio0.disabled='0'
 uci set wireless.@wifi-iface[0].ssid='Titok'
 uci set wireless.@wifi-iface[0].key='yunding888'
 uci set wireless.@wifi-iface[0].encryption='psk2'
 
-# 设置 5G WiFi（如果存在 radio1）
 if uci get wireless.radio1 >/dev/null 2>&1; then
     uci set wireless.radio1.disabled='0'
     uci set wireless.@wifi-iface[1].ssid='Titok_5G'
@@ -231,59 +271,56 @@ fi
 uci commit wireless
 wifi
 
-# 设置 root 密码为 erlang
 echo "root:erlang" | chpasswd
 
-# 删除自身（首次启动后生效）
 rm -f /etc/uci-defaults/99-custom-settings
 EOF
-    chmod +x "$UCI_DEFAULTS_DIR/99-custom-settings"
+    chmod +x "$uci_dir/99-custom-settings"
+}
 
-    # ========== 修改 default-settings 中的构建者信息 ==========
-    if [ -n "$BUILD_DATE" ]; then
-        VERSION_SUFFIX="$BUILD_DATE"
-    else
-        VERSION_SUFFIX="$(date +%y.%m.%d)"
-    fi
-
-    # 查找并替换所有包含 ZqinKing 的 Makefile（多个可能路径）
-    for mk in "$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/Makefile" \
-              "$BASE_PATH/../$BUILD_DIR/package/immortalwrt/default-settings/Makefile" \
-              "$BASE_PATH/../$BUILD_DIR/feeds/emortal/default-settings/Makefile" \
-              "$BASE_PATH/../$BUILD_DIR/feeds/immortalwrt/default-settings/Makefile"; do
-        if [ -f "$mk" ]; then
-            sed -i "s/ZqinKing/Kinsum@$VERSION_SUFFIX/g" "$mk"
-            echo "✅ 已修改 $mk"
+setup_build_info() {
+    local build_root="$1"
+    local version_number="$2"
+    local maker="Kinsum@$version_number"
+    local makefiles=(
+        "$build_root/package/emortal/default-settings/Makefile"
+        "$build_root/package/immortalwrt/default-settings/Makefile"
+        "$build_root/feeds/emortal/default-settings/Makefile"
+        "$build_root/feeds/immortalwrt/default-settings/Makefile"
+    )
+    for mk in "${makefiles[@]}"; do
+        if [[ -f "$mk" ]]; then
+            sed -i "s/ZqinKing/$maker/g" "$mk"
+            echo "✅ Updated $mk"
         fi
     done
+}
 
-    # ========== 修改 athena_led 默认配置 ==========
-    ATHENA_CFG="$BASE_PATH/../$BUILD_DIR/files/etc/config/athena_led"
-    mkdir -p "$(dirname "$ATHENA_CFG")"
-    cat > "$ATHENA_CFG" << 'EOF'
+setup_athena_led() {
+    local build_root="$1"
+    local cfg_dir="$build_root/files/etc/config"
+    mkdir -p "$cfg_dir"
+    cat > "$cfg_dir/athena_led" << 'EOF'
 config athena_led 'config'
     option enable '1'
     option value 'Kinsum love you!'
     option seconds '5'
-	option status 'time'
+    option status 'time'
     option lightLevel '2'
     option tempFlag '4'
-    
 EOF
-    echo "✅ athena_led 配置已创建"
+}
 
-    # ========== 修改 banner 登录欢迎信息 ==========
-    BANNER_FILE="$BASE_PATH/../$BUILD_DIR/package/base-files/files/etc/banner"
+#=====================
 
-    # 1. 打印实际路径，方便调试确认是否正确
-    echo "Banner target path: $BANNER_FILE"
+setup_banner() {
+    local build_root="$1"
+    local banner_file="$build_root/package/base-files/files/etc/banner"
+    mkdir -p "$(dirname "$banner_file")"
+    local date_str="$(date '+%Y-%m-%d ')"   # 提前获取日期字符串
 
-    # 2. 确保目标目录存在（避免因目录不存在而写入失败）
-    mkdir -p "$(dirname "$BANNER_FILE")"
-
-    # 3. 写入个性化 Banner（注意：这里 << EOF 不带引号，以便 $(date) 能被Shell展开）
-    cat > "$BANNER_FILE" << EOF
-
+    # 使用 << 'EOF' 禁用所有展开，但日期通过变量单独插入
+    cat > "$banner_file" << 'EOF'
 --------------------------------------------------------
 Welcome to...
 --------------------------------------------------------
@@ -297,32 +334,33 @@ Welcome to...
 --------------------------------------------------------
   Firmware compiled by Kinsum @ DATE_PLACEHOLDER
 --------------------------------------------------------
-                                                                                                                   
-
 EOF
 
-    # 4. 检查写入结果
-    if [ $? -eq 0 ]; then
-        echo "Banner updated successfully with Kinsum."
-    else
-        echo "ERROR: Failed to update banner."
-    fi
+    # 替换日期占位符
+    sed -i "s/DATE_PLACEHOLDER/$date_str/" "$banner_file"
+}
 
-    # ======================== 定时开关灯 ========================
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/crontabs/root" << "EOF"
-# 每天 23:00 关闭 LED
+#====================================
+
+
+
+setup_cron() {
+    local build_root="$1"
+    local cron_dir="$build_root/files/etc/crontabs"
+    mkdir -p "$cron_dir"
+    cat > "$cron_dir/root" << "EOF"
 0 23 * * * uci set athena_led.config.enable='0' && uci commit athena_led && /etc/init.d/athena_led reload
-# 每天 07:00 开启 LED
 0 7 * * * uci set athena_led.config.enable='3' && uci commit athena_led && /etc/init.d/athena_led reload
 EOF
-    echo "✅ 定时开关灯 crontab 已配置"
+}
 
-    # ======================== 按键功能：wps 控制底部灯光 ========================
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/rgb_toggle.sh" << "EOF"
+setup_button_handlers() {
+    local build_root="$1"
+    local files_dir="$build_root/files"
+
+    # 脚本：切换 RGB
+    cat > "$files_dir/etc/rgb_toggle.sh" << "EOF"
 #!/bin/sh
-# 切换底部 RGB 灯光模式：0关、1呼吸、2常亮、3自定义（循环切换）
 CURRENT=$(uci get athena_led.config.enable 2>/dev/null)
 [ -z "$CURRENT" ] && CURRENT=0
 NEXT=$(( (CURRENT + 1) % 4 ))
@@ -331,18 +369,15 @@ uci commit athena_led
 /etc/init.d/athena_led restart
 logger -t "rgb_toggle" "RGB mode switched to $NEXT"
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/rgb_toggle.sh"
+    chmod +x "$files_dir/etc/rgb_toggle.sh"
 
-    # ======================== 按键功能：BTN_1 切换屏幕显示内容 ========================
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/screen_toggle.sh" << "EOF"
+    # 脚本：切换屏幕显示
+    cat > "$files_dir/etc/screen_toggle.sh" << "EOF"
 #!/bin/sh
-# 切换屏幕 LED 显示内容：time, date, weather, network, temp 等（循环）
-# 请根据实际设备支持的 status 值调整列表（可通过 uci show athena_led 查看）
 STATUS_LIST="time date weather network temp"
 CURRENT=$(uci get athena_led.config.status 2>/dev/null)
 [ -z "$CURRENT" ] && CURRENT="time"
 
-# 查找当前索引
 INDEX=0
 for s in $STATUS_LIST; do
     if [ "$s" = "$CURRENT" ]; then
@@ -350,7 +385,6 @@ for s in $STATUS_LIST; do
     fi
     INDEX=$((INDEX + 1))
 done
-# 计算下一个索引
 NEXT_INDEX=$(( (INDEX + 1) % $(echo $STATUS_LIST | wc -w) ))
 NEXT_STATUS=$(echo $STATUS_LIST | cut -d' ' -f$((NEXT_INDEX+1)))
 
@@ -359,360 +393,244 @@ uci commit athena_led
 /etc/init.d/athena_led restart
 logger -t "screen_toggle" "Screen display switched to $NEXT_STATUS"
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/screen_toggle.sh"
+    chmod +x "$files_dir/etc/screen_toggle.sh"
 
-    # ======================== 热插拔事件处理（交换按键功能） ========================
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-custom-buttons" << "EOF"
+    # 热插拔事件
+    local hotplug_dir="$files_dir/etc/hotplug.d/button"
+    mkdir -p "$hotplug_dir"
+    cat > "$hotplug_dir/01-custom-buttons" << "EOF"
 #!/bin/sh
-# 按键功能映射：
-#   wps   → 切换 RGB 灯光模式（关/呼吸/常亮/自定义）
-#   BTN_1 → 切换屏幕显示内容（时间/日期/天气/网络等）
 case "$ACTION" in
     pressed)
-        # 防抖动
         LAST=$(cat /tmp/button_last_time 2>/dev/null)
         NOW=$(cut -d '.' -f 1 /proc/uptime)
         if [ -n "$LAST" ] && [ $((NOW - LAST)) -lt 1 ]; then
             exit 0
         fi
         echo "$NOW" > /tmp/button_last_time
-
         logger -t "button-handler" "Button pressed: $BUTTON"
-
         case "$BUTTON" in
-            wps)
-                /etc/rgb_toggle.sh &
-                ;;
-            BTN_1)
-                /etc/screen_toggle.sh &
-                ;;
+            wps)   /etc/rgb_toggle.sh & ;;
+            BTN_1) /etc/screen_toggle.sh & ;;
         esac
         ;;
 esac
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/hotplug.d/button/01-custom-buttons"
-    # ============================================================
+    chmod +x "$hotplug_dir/01-custom-buttons"
+}
 
-    # ========== 通用 eMMC 数据分区自动格式化与挂载（增强版） ==========
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/init.d"
-    cat > "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data" << 'EOF'
+setup_data_partition() {
+    local build_root="$1"
+    local initd_dir="$build_root/files/etc/init.d"
+    mkdir -p "$initd_dir"
+    cat > "$initd_dir/format_data" << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
 STOP=10
-
 MOUNT_POINT="/opt"
 FS_TYPE="ext4"
 STAMP="/etc/.data_formatted"
 
-# 更智能的分区查找：优先查找最大的未挂载 mmcblk 分区
 find_partition() {
-    local part=""
-    # 1. 尝试常见的雅典娜分区
     for p in /dev/mmcblk0p27 /dev/mmcblk0p28 /dev/mmcblk1p1; do
         [ -b "$p" ] && { echo "$p"; return 0; }
     done
-
-    # 2. 搜索所有 mmcblk 分区，排除已挂载的，选择最大的（通常是用户数据区）
     for p in /dev/mmcblk[0-9]p*; do
         [ -b "$p" ] || continue
-        # 跳过已挂载的分区
         mount | grep -q "$p" && continue
-        # 跳过 boot 分区（通常很小）
         size=$(blockdev --getsz "$p" 2>/dev/null)
         [ -z "$size" ] && continue
-        # 大于 1GB 的分区视为可能的数据区
         if [ "$size" -gt 2000000 ]; then
-            part="$p"
-            break
+            echo "$p"; return 0
         fi
     done
-
-    if [ -n "$part" ]; then
-        echo "$part"
-        return 0
-    fi
-
-    # 3. 回退：列出所有 mmcblk0p* 取最后一个
     local last=$(ls /dev/mmcblk0p* 2>/dev/null | sort -V | tail -1)
     [ -n "$last" ] && echo "$last" && return 0
-
     return 1
 }
 
 start() {
-    logger -t "format_data" "=== Starting data partition setup ==="
-
+    logger -t "format_data" "Starting data partition setup"
     PARTITION=$(find_partition)
-    if [ -z "$PARTITION" ]; then
-        logger -t "format_data" "ERROR: No suitable partition found. Skip."
-        return 1
-    fi
+    [ -z "$PARTITION" ] && { logger -t "format_data" "No suitable partition found"; return 1; }
     logger -t "format_data" "Using partition: $PARTITION"
-
-    if mount | grep -q "$PARTITION"; then
-        logger -t "format_data" "$PARTITION already mounted."
-        return 0
-    fi
-
-    # 检查文件系统类型
+    mount | grep -q "$PARTITION" && { logger -t "format_data" "Already mounted"; return 0; }
     FSTYPE=$(blkid -s TYPE -o value "$PARTITION" 2>/dev/null)
-    logger -t "format_data" "Current filesystem: ${FSTYPE:-none}"
-
-    # 如果不存在标记文件且文件系统不是 ext4，则格式化
     if [ ! -f "$STAMP" ] && [ "$FSTYPE" != "$FS_TYPE" ]; then
-        logger -t "format_data" "Formatting $PARTITION as $FS_TYPE..."
-        if mkfs.ext4 -F "$PARTITION" >/dev/null 2>&1; then
-            touch "$STAMP"
-            logger -t "format_data" "Format completed."
-        else
-            logger -t "format_data" "Format failed!"
-            return 1
-        fi
-    else
-        logger -t "format_data" "Partition already $FS_TYPE or stamp exists, skipping format."
+        logger -t "format_data" "Formatting $PARTITION as $FS_TYPE"
+        mkfs.ext4 -F "$PARTITION" >/dev/null 2>&1 || return 1
+        touch "$STAMP"
     fi
-
-    # 挂载
     mkdir -p "$MOUNT_POINT"
-    if mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null; then
-        logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT"
-    else
+    mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null || {
         sleep 2
-        if mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null; then
-            logger -t "format_data" "Mounted $PARTITION to $MOUNT_POINT (retry)"
-        else
-            logger -t "format_data" "Mount failed!"
-            return 1
-        fi
-    fi
-
-    # 写入 fstab（避免重复）
-    if ! grep -q "$PARTITION" /etc/fstab; then
-        echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
-        logger -t "format_data" "Added to fstab"
-    fi
+        mount -t "$FS_TYPE" "$PARTITION" "$MOUNT_POINT" 2>/dev/null || return 1
+    }
+    grep -q "$PARTITION" /etc/fstab || echo "$PARTITION $MOUNT_POINT $FS_TYPE defaults 0 0" >> /etc/fstab
+    logger -t "format_data" "Mounted successfully"
 }
 EOF
-    chmod +x "$BASE_PATH/../$BUILD_DIR/files/etc/init.d/format_data"
-    mkdir -p "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d"
-    ln -sf /etc/init.d/format_data "$BASE_PATH/../$BUILD_DIR/files/etc/rc.d/S99format_data" 2>/dev/null || true
-    echo "✅ format_data 已配置（增强版）"
-    # ============================================================
-
-    # ========== 复制 status.cgi 到 /www/cgi-bin/ ==========
-    SOURCE_CGI="$BASE_PATH/modules/status.cgi"
-    if [ -f "$SOURCE_CGI" ]; then
-        TARGET_CGI_DIR="$BASE_PATH/../$BUILD_DIR/files/www/cgi-bin"
-        mkdir -p "$TARGET_CGI_DIR"
-        cp -f "$SOURCE_CGI" "$TARGET_CGI_DIR/"
-        chmod +x "$TARGET_CGI_DIR/status.cgi"
-        echo "✅ status.cgi 已复制并赋予执行权限"
-    else
-        echo "⚠️  status.cgi 未找到，跳过"
-    fi
-    # ========================================================
-
-    echo "✅ apply_config: 所有自定义配置已完成"
+    chmod +x "$initd_dir/format_data"
+    local rc_dir="$build_root/files/etc/rc.d"
+    mkdir -p "$rc_dir"
+    ln -sf /etc/init.d/format_data "$rc_dir/S99format_data" 2>/dev/null || true
 }
 
-REPO_URL=$(read_ini_by_key "REPO_URL")
-REPO_BRANCH=$(read_ini_by_key "REPO_BRANCH")
-REPO_BRANCH=${REPO_BRANCH:-main}
-BUILD_DIR=$(read_ini_by_key "BUILD_DIR")
-COMMIT_HASH=$(read_ini_by_key "COMMIT_HASH")
-COMMIT_HASH=${COMMIT_HASH:-none}
-
-if [[ -d action_build ]]; then
-    BUILD_DIR="action_build"
-fi
-
-"$BASE_PATH/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BUILD_DIR" "$COMMIT_HASH"
-
-apply_config
-remove_uhttpd_dependency
-
-cd "$BASE_PATH/../$BUILD_DIR"
-
-# ========== 强制禁用 GDB（在 defconfig 之前） ==========
-# 确保 .config 中 GDB 被关闭
-sed -i '/^CONFIG_GDB/d' .config
-echo "# CONFIG_GDB is not set" >> .config
-echo "✅ 已在 defconfig 前禁用 GDB"
-# ====================================================
-
-# ========== 添加自定义 feeds 源（注释掉） ==========
-# echo 'src-git bandix https://github.com/timsaya/luci-app-bandix-plus.git' >> feeds.conf.default
-# echo 'src-git kiddin9 https://github.com/kiddin9/kwrt-packages.git;main' >> feeds.conf.default
-echo "✅ 自定义 feeds 源已跳过（如需要请取消注释）"
-
-# ========== 集成 rtp2httpd 源码 ==========
-# 将 rtp2httpd 仓库中的三个独立包复制到 package/ 根目录
-RTP2HTTPD_TMP="/tmp/rtp2httpd_repo"
-RTP2HTTPD_PACKAGES="luci-app-rtp2httpd taskd luci-lib-taskd"
-
-# 清理旧临时目录（避免残留）
-rm -rf "$RTP2HTTPD_TMP"
-git clone --depth=1 https://github.com/stackia/rtp2httpd.git "$RTP2HTTPD_TMP"
-
-for pkg in $RTP2HTTPD_PACKAGES; do
-    if [ -d "$RTP2HTTPD_TMP/$pkg" ]; then
-        rm -rf "package/$pkg"
-        cp -r "$RTP2HTTPD_TMP/$pkg" "package/"
-        echo "✅ 已复制 $pkg 到 package/"
+copy_status_cgi() {
+    local base_path="$1"
+    local build_root="$2"
+    local src="$base_path/modules/status.cgi"
+    if [[ -f "$src" ]]; then
+        local dst_dir="$build_root/files/www/cgi-bin"
+        mkdir -p "$dst_dir"
+        cp -f "$src" "$dst_dir/"
+        chmod +x "$dst_dir/status.cgi"
+        echo "✅ status.cgi copied"
     else
-        echo "⚠️  源目录中未找到 $pkg，跳过"
+        echo "⚠️ status.cgi not found, skip"
     fi
-done
+}
 
-rm -rf "$RTP2HTTPD_TMP"
-echo "✅ rtp2httpd 相关包已集成到 package/"
+remove_uhttpd_dependency() {
+    local build_root="$1"
+    local config_path="$build_root/.config"
+    local luci_makefile="$build_root/feeds/luci/collections/luci/Makefile"
+    if grep -q "CONFIG_PACKAGE_luci-app-quickfile=y" "$config_path" && [[ -f "$luci_makefile" ]]; then
+        sed -i '/luci-light/d' "$luci_makefile"
+        echo "Removed uhttpd dependency due to quickfile (nginx)"
+    fi
+}
 
-# ========== 集成 WiFiPortal 插件 ==========
-echo "正在集成 WiFiPortal 插件..."
-WIFIPORTAL_TMP="/tmp/WiFiPortal_repo"
-rm -rf "$WIFIPORTAL_TMP"
-git clone --depth=1 https://github.com/wiwizcom/WiFiPortal.git "$WIFIPORTAL_TMP"
+# ==================== 集成额外软件包（修复版） ====================
+integrate_extra_packages() {
+    local build_root="$1"
+    echo ">>> Integrating rtp2httpd packages..."
 
-# 复制插件核心目录到 package/ 下
-for pkg in dcc2-wiwiz eqos-master-wiwiz wifidog-wiwiz; do
-    if [ -d "$WIFIPORTAL_TMP/$pkg" ]; then
-        rm -rf "package/$pkg"
-        cp -r "$WIFIPORTAL_TMP/$pkg" "package/"
-        echo "✅ 已复制 $pkg 到 package/"
+    local tmp_dir=""
+    tmp_dir="$(mktemp -d)" || {
+        echo "ERROR: Failed to create temp directory" >&2
+        return 1
+    }
+    # ✅ 修复：使用安全展开，避免 unbound variable
+    trap 'rm -rf "${tmp_dir:-}"' RETURN
+
+    git clone --depth=1 https://github.com/stackia/rtp2httpd.git "$tmp_dir" || {
+        echo "ERROR: Failed to clone rtp2httpd" >&2
+        return 1
+    }
+
+    local packages=("luci-app-rtp2httpd" "taskd" "luci-lib-taskd")
+    for pkg in "${packages[@]}"; do
+        if [[ -d "$tmp_dir/$pkg" ]]; then
+            rm -rf "$build_root/package/$pkg"
+            cp -r "$tmp_dir/$pkg" "$build_root/package/"
+            echo "✅ Copied $pkg"
+        else
+            echo "⚠️ $pkg not found in repo, skip"
+        fi
+    done
+
+    # 在 .config 中启用
+    echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> "$build_root/.config"
+    echo "CONFIG_PACKAGE_taskd=y" >> "$build_root/.config"
+    echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> "$build_root/.config"
+
+    # （可选）集成 netem —— 注释掉，若需要可取消
+    # ...
+}
+
+# ==================== 编译固件 ====================
+build_firmware() {
+    local base_path="$1"
+    local build_root="$2"
+    local config_file="$3"
+    local version_number="$4"
+    local device="$5"
+
+    echo ">>> Building firmware for $device..."
+
+    cd "$build_root"
+
+    # 运行 defconfig
+    make defconfig
+
+    # 下载 OpenClash 内核（若有 diy-part.sh）
+    if [[ -f "$(dirname "$0")/diy-part.sh" ]]; then
+        (cd "$build_root" && "$(dirname "$0")/diy-part.sh")
+    fi
+
+    # 追加必要包
+    cat >> .config << EOF
+CONFIG_PACKAGE_e2fsprogs=y
+CONFIG_PACKAGE_blkid=y
+EOF
+
+    # 强制写入版本信息
+    cat >> .config << EOF
+CONFIG_VERSION_DIST="KinWRT"
+CONFIG_VERSION_MANUFACTURER="Kinsum@$version_number"
+CONFIG_VERSION_NUMBER="$version_number"
+EOF
+
+    make oldconfig
+
+    # 若目标是 x86_64，修改 distfeeds
+    if grep -qE "^CONFIG_TARGET_x86_64=y" "$config_file"; then
+        local distfeeds="$build_root/package/emortal/default-settings/files/99-distfeeds.conf"
+        if [[ -f "$distfeeds" ]]; then
+            sed -i 's/aarch64_cortex-a53/x86_64/g' "$distfeeds"
+        fi
+    fi
+
+    # 移除 uhttpd 依赖（如果需要）
+    remove_uhttpd_dependency "$build_root"
+
+    # 清理旧固件（保留目录结构）
+    local target_dir="$build_root/bin/targets"
+    if [[ -d "$target_dir" ]]; then
+        find "$target_dir" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec rm -f {} +
+    fi
+
+    # 下载源码
+    make download -j"$(nproc)"
+
+    # 编译
+    if ! make -j"$(nproc)"; then
+        echo ">>> Build failed, retrying with V=s..." >&2
+        make -j1 V=s || {
+            echo ">>> Build failed again. Exiting." >&2
+            exit 1
+        }
+    fi
+
+    # 修正 openwrt_release
+    local release_file
+    release_file="$(find "$target_dir" -path "*/root-*/etc/openwrt_release" 2>/dev/null | head -1)"
+    if [[ -f "$release_file" ]]; then
+        sed -i "s/ZqinKing/Kinsum@$version_number/g" "$release_file"
+        echo "✅ Updated openwrt_release"
+    fi
+}
+
+# ==================== 收集固件 ====================
+collect_firmware() {
+    local base_path="$1"
+    local build_root="$2"
+    local target_dir="$build_root/bin/targets"
+    local output_dir="$base_path/../$FIRMWARE_OUTPUT_DIR"
+
+    rm -rf "$output_dir"
+    mkdir -p "$output_dir"
+
+    if [[ -d "$target_dir" ]]; then
+        find "$target_dir" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec cp -f {} "$output_dir/" \;
+        echo ">>> Firmware copied to $output_dir"
     else
-        echo "⚠️  未找到 $pkg，跳过"
+        echo "WARNING: No target directory found, firmware may not be generated." >&2
     fi
-done
-rm -rf "$WIFIPORTAL_TMP"
 
-# 更新 feeds（非常重要，让OpenWrt识别新包）
-./scripts/feeds update -a
-./scripts/feeds install -a
-echo "✅ WiFiPortal 插件集成完成"
-# =======================================
+    rm -f "$output_dir/Packages.manifest" 2>/dev/null || true
+}
 
-# ========== 集成 netem 源码（注释掉） ==========
-# 如需启用，取消注释以下内容
-#NETEM_TMP="/tmp/netem_repo"
-#NETEM_PACKAGES="netem-control luci-app-netem"
-#rm -rf "$NETEM_TMP"
-#git clone --depth=1 https://github.com/Connectify/openwrt-netem.git "$NETEM_TMP"
-#for pkg in $NETEM_PACKAGES; do
-#    if [ -d "$NETEM_TMP/$pkg" ]; then
-#        rm -rf "package/$pkg"
-#        cp -r "$NETEM_TMP/$pkg" "package/"
-#        echo "✅ 已复制 $pkg 到 package/"
-#    else
-#        echo "⚠️  源目录中未找到 $pkg，跳过"
-#    fi
-#done
-#rm -rf "$NETEM_TMP"
-#echo "✅ netem 相关包已集成到 package/"
-#echo "CONFIG_PACKAGE_netem-control=y" >> .config
-#echo "CONFIG_PACKAGE_luci-app-netem=y" >> .config
-#echo "CONFIG_PACKAGE_kmod-netem=y" >> .config   
-#echo "CONFIG_PACKAGE_tc=y" >> .config 
-
-# ===========================================
-make defconfig
-
-# ========== 再次确保 GDB 禁用（defconfig 可能覆盖） ==========
-sed -i '/^CONFIG_GDB/d' .config
-echo "# CONFIG_GDB is not set" >> .config
-echo "✅ defconfig 后再次禁用 GDB"
-# ============================================================
-
-# 追加必要的包（用于分区格式化）
-echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
-echo "CONFIG_PACKAGE_blkid=y" >> .config
-
-# 启用 rtp2httpd 相关包
-echo "CONFIG_PACKAGE_luci-app-rtp2httpd=y" >> .config
-echo "CONFIG_PACKAGE_taskd=y" >> .config
-echo "CONFIG_PACKAGE_luci-lib-taskd=y" >> .config
-
-# 启用 WiFiPortal 相关包
-echo "CONFIG_PACKAGE_luci-app-eqos=y" >> .config
-echo "CONFIG_PACKAGE_wifidog-wiwiz=y" >> .config
-echo "CONFIG_PACKAGE_dcc2-wiwiz-nossl=y" >> .config
-echo "CONFIG_PACKAGE_autokick-wiwiz=y" >> .config
-# 确保 luci-ssl-openssl 等依赖也被选中
-echo "CONFIG_PACKAGE_luci-ssl-openssl=y" >> .config
-echo "CONFIG_PACKAGE_luci=y" >> .config
-echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-
-# ========== 在 make defconfig 之后强制写入版本信息 ==========
-if [ -n "$BUILD_DATE" ]; then
-    VERSION_NUMBER="$BUILD_DATE"
-else
-    VERSION_NUMBER="$(date +%y.%m.%d)"
-fi
-
-echo "CONFIG_VERSION_DIST=\"MyWRT\"" >> .config
-echo "CONFIG_VERSION_MANUFACTURER=\"Kinsum@$VERSION_NUMBER\"" >> .config
-echo "CONFIG_VERSION_NUMBER=\"$VERSION_NUMBER\"" >> .config
-echo 'CONFIG_VERSION_REPO="https://github.com/kinsum666/wrt_release"' >> .config
-
-make oldconfig
-
-# ========== 再次检查并修正 GDB（oldconfig 可能恢复） ==========
-if grep -q "^CONFIG_GDB=y" .config; then
-    sed -i '/^CONFIG_GDB/d' .config
-    echo "# CONFIG_GDB is not set" >> .config
-    echo "⚠️  oldconfig 恢复了 GDB，已再次禁用"
-    make oldconfig   # 重新调整依赖
-fi
-# 最后再确保一次
-if grep -q "^CONFIG_GDB=y" .config; then
-    echo "ERROR: 无法禁用 GDB，请手动检查 .config"
-    exit 1
-fi
-echo "✅ GDB 已彻底禁用"
-# ============================================================
-
-# 如果目标是 x86_64，修改 distfeeds
-if grep -qE "^CONFIG_TARGET_x86_64=y" "$CONFIG_FILE"; then
-    DISTFEEDS_PATH="$BASE_PATH/../$BUILD_DIR/package/emortal/default-settings/files/99-distfeeds.conf"
-    if [ -d "${DISTFEEDS_PATH%/*}" ] && [ -f "$DISTFEEDS_PATH" ]; then
-        sed -i 's/aarch64_cortex-a53/x86_64/g' "$DISTFEEDS_PATH"
-    fi
-fi
-
-if [[ $Build_Mod == "debug" ]]; then
-    exit 0
-fi
-
-# ========== 清理所有 .la 文件，消除 libtool 硬编码路径 ==========
-echo "清理 staging_dir 下所有 .la 文件，避免路径错误..."
-find "$BASE_PATH/../$BUILD_DIR/staging_dir" -name "*.la" -type f -delete
-echo "✅ .la 文件清理完成"
-# ================================================================
-
-TARGET_DIR="$BASE_PATH/../$BUILD_DIR/bin/targets"
-if [[ -d $TARGET_DIR ]]; then
-    find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec rm -f {} +
-fi
-
-make download -j$(($(nproc) * 2))
-make -j$(($(nproc) + 1)) || make -j1 V=s
-
-# ========== 在打包前修正 openwrt_release ==========
-# 查找并修改生成的 openwrt_release 文件，确保 build by 正确
-RELEASE_FILE=$(find "$TARGET_DIR" -path "*/root-*/etc/openwrt_release" 2>/dev/null | head -1)
-if [ -f "$RELEASE_FILE" ]; then
-    sed -i "s/ZqinKing/Kinsum@$VERSION_NUMBER/g" "$RELEASE_FILE"
-    echo "✅ 已修正 openwrt_release ($RELEASE_FILE)"
-else
-    echo "⚠️ 未找到 openwrt_release 文件，跳过"
-fi
-
-FIRMWARE_DIR="$BASE_PATH/../firmware"
-\rm -rf "$FIRMWARE_DIR"
-mkdir -p "$FIRMWARE_DIR"
-find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec cp -f {} "$FIRMWARE_DIR/" \;
-\rm -f "$BASE_PATH/../firmware/Packages.manifest" 2>/dev/null
-
-if [[ -d action_build ]]; then
-    make clean
-fi
+# ==================== 入口 ====================
+main "$@"
