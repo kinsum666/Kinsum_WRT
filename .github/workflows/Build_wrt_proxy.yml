@@ -192,7 +192,40 @@ jobs:
           cp -r ./firmware/* ./upload/ 2>/dev/null || true
 
           # 进入 upload 目录，对每个文件重命名（添加型号和日期）
-       #   cd ./upload
+          cd ./upload
+          # 定义需要重命名的固件扩展名
+          EXTENSIONS="bin img itb ubi tar.gz efi.img.gz"
+          for FILE in *.*; do
+          if [ -f "$FILE" ]; then
+            BASENAME="${FILE%.*}"
+            EXT="${FILE##*.}"
+           if [[ "$FILE" == *.tar.gz ]]; then
+            BASENAME="${FILE%.tar.gz}"
+            EXT="tar.gz"
+            elif [[ "$FILE" == *.efi.img.gz ]]; then
+            BASENAME="${FILE%.efi.img.gz}"
+            EXT="efi.img.gz"
+           fi
+           
+           # ✅ 去掉 qualcommax（将 -qualcommax- 替换为 -）
+           BASENAME="${BASENAME//-qualcommax-/-}"
+           
+           NEED_RENAME=false
+             for ext in $EXTENSIONS; do
+               if [[ "$EXT" == "$ext" ]]; then
+                NEED_RENAME=true
+                break
+             fi
+           done
+
+           if [ "$NEED_RENAME" = true ]; then
+            NEWNAME="${BASENAME}_${{ env.BUILD_DATE }}.${EXT}"
+            mv "$FILE" "$NEWNAME"
+            echo "Renamed: $FILE -> $NEWNAME"
+            fi
+          fi
+          done 
+           
      #     for FILE in *.*; do
       #      if [ -f "$FILE" ]; then
         #      BASENAME="${FILE%.*}"
