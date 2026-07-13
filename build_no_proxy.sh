@@ -200,7 +200,7 @@ apply_custom_config() {
     # 3. 追加公共编译基础配置、Docker 依赖、代理配置
     cat "$base_path/deconfig/compile_base.config" \
         "$base_path/deconfig/docker_deps.config" \
-    #    "$base_path/deconfig/proxy.config" >> "$build_root/.config" 2>/dev/null || true
+        #"$base_path/deconfig/proxy.config" >> "$build_root/.config" 2>/dev/null || true
 
     # 4. 创建 uci-defaults 自定义设置（IP、WiFi、密码等）
     setup_uci_defaults "$build_root"
